@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Юридический ассистент РБ</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-text">Юридический ассистент РБ</span>
+    </div>
+    <div class="topbar-right">
+      <button id="newChatBtn" class="icon-btn" type="button" aria-label="Новый чат" title="Новый чат">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 5v14M5 12h14"></path>
+        </svg>
+      </button>
+      <div class="avatar" title="Гость">Г</div>
+    </div>
+  </header>
+
+  <main id="appMain" class="app-main is-empty">
+    <section id="welcomeBlock" class="welcome">
+      <h1>Здравствуйте! Чем могу помочь?</h1>
+      <p class="welcome-sub">Спросите про любой кодекс Республики Беларусь — найду статью и объясню.</p>
+    </section>
+
+    <section id="chatMessages" class="chat-messages" aria-live="polite"></section>
+
+    <section class="composer-wrap">
+      <div class="composer-box">
+        <label class="sr-only" for="chatInput">Введите вопрос</label>
+        <textarea
+          id="chatInput"
+          placeholder="Спросите про законодательство РБ"
+          rows="1"
+        ></textarea>
+        <div class="composer-toolbar">
+          <div class="composer-left">
+            <span class="composer-mark" aria-hidden="true"></span>
+
+            <div id="chatType" class="mode-dd" data-value="normal">
+              <button type="button" class="mode-dd-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="mode-dd-label">Обычный</span>
+                <svg class="mode-dd-chevron" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+                  <path fill="currentColor" d="M2 4.5l4 4 4-4z"></path>
+                </svg>
+              </button>
+              <div class="mode-dd-menu" role="listbox" hidden>
+                <button type="button" class="mode-dd-option" role="option" data-value="normal" aria-selected="true">Обычный</button>
+                <button type="button" class="mode-dd-option" role="option" data-value="compare" aria-selected="false">Сравнение</button>
+              </div>
+            </div>
+
+            <div id="transportMode" class="mode-dd" data-value="{{ mode }}">
+              <button type="button" class="mode-dd-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="mode-dd-label">{{ mode|upper }}</span>
+                <svg class="mode-dd-chevron" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+                  <path fill="currentColor" d="M2 4.5l4 4 4-4z"></path>
+                </svg>
+              </button>
+              <div class="mode-dd-menu" role="listbox" hidden>
+                {% for m in available_modes %}
+                <button
+                  type="button"
+                  class="mode-dd-option"
+                  role="option"
+                  data-value="{{ m }}"
+                  aria-selected="{{ 'true' if m == mode else 'false' }}"
+                >{{ m|upper }}</button>
+                {% endfor %}
+              </div>
+            </div>
+
+            <button
+              id="micBtn"
+              class="mic-btn"
+              type="button"
+              data-state="idle"
+              data-stt-ready="{{ 'true' if voice_stt_ready else 'false' }}"
+              aria-label="Голосовой ввод"
+              title="Голосовой ввод"
+            >
+              <svg class="mic-icon-idle" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" y1="19" x2="12" y2="23"></line>
+                <line x1="8" y1="23" x2="16" y2="23"></line>
+              </svg>
+              <svg class="mic-icon-rec" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true">
+                <rect x="5" y="5" width="14" height="14" rx="2"></rect>
+              </svg>
+            </button>
+          </div>
+          <button id="sendBtn" class="send-circle" type="button" aria-label="Отправить">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="19" x2="12" y2="5"></line>
+              <polyline points="5 12 12 5 19 12"></polyline>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div id="chatStatus" class="status-line"></div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
