@@ -76,7 +76,7 @@ if MODE == "local":
     LLM_MODEL = OLLAMA_LLM_MODEL
     BASE_URL = OLLAMA_BASE_URL + "/chat/completions"
     BASE_URL1 = OLLAMA_BASE_URL + "/chat/completions"
-    EMBEDDING_MODEL = "bge-m3:567m"
+    EMBEDDING_MODEL = "qwen3-embedding:4b"
     HEADERS = {"Content-Type": "application/json"}
     HEADERS1 = HEADERS
     COLLECTION_NAME = "electoral_local"
@@ -85,7 +85,7 @@ elif MODE == "api":
     BASE_URL = OLLAMA_BASE_URL + "/chat/completions"
     BASE_URL1 = OPENROUTER_BASE_URL
     LLM_MODEL = OPENROUTER_LLM_MODEL
-    EMBEDDING_MODEL = "bge-m3:567m"
+    EMBEDDING_MODEL = "qwen3-embedding:4b"
     HEADERS = {"Content-Type": "application/json"}
     _auth = OPENROUTER_API_KEY.strip()
     HEADERS1 = {
