@@ -653,3 +653,334 @@ async function transcribeBlob(blob) {
 }
 
 micEl()?.addEventListener("click", startMicRecording);
+
+/* ---------- Model setup (autoselect) ---------- */
+
+const SETUP_SKIP_KEY = "rag.setup.skip.v1";
+let setupPollTimer = null;
+let setupSelection = { llm: "", asr: "", embedding: "", reranker: "" };
+let setupLatest = null;
+
+const DL_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M12 3v12"></path>
+  <path d="M7 10l5 5 5-5"></path>
+  <path d="M5 21h14"></path>
+</svg>`;
+
+function setupSkipped() {
+  try {
+    return localStorage.getItem(SETUP_SKIP_KEY) === "1";
+  } catch (_e) {
+    return false;
+  }
+}
+
+function setSetupSkipped(value) {
+  try {
+    if (value) localStorage.setItem(SETUP_SKIP_KEY, "1");
+    else localStorage.removeItem(SETUP_SKIP_KEY);
+  } catch (_e) {
+    /* ignore */
+  }
+}
+
+function hideSetupOverlay() {
+  const overlay = $("setupOverlay");
+  if (overlay) overlay.hidden = true;
+  if (setupPollTimer) {
+    clearInterval(setupPollTimer);
+    setupPollTimer = null;
+  }
+}
+
+function showSetupOverlay() {
+  const overlay = $("setupOverlay");
+  if (overlay) overlay.hidden = false;
+}
+
+function formatSizeGb(value) {
+  const n = Number(value || 0);
+  if (n >= 10) return `${n.toFixed(0)} GB`;
+  return `${n.toFixed(1)} GB`;
+}
+
+function currentSelection() {
+  return {
+    llm: setupSelection.llm,
+    asr: setupSelection.asr,
+    embedding: setupSelection.embedding,
+    reranker: setupSelection.reranker,
+  };
+}
+
+function progressFor(modelId, install) {
+  const map = install?.progress || {};
+  return map[modelId] || null;
+}
+
+function renderSetupSlots(data) {
+  const root = $("setupSlots");
+  if (!root) return;
+  const install = data.install || {};
+  const slots = data.slots || [];
+
+  root.innerHTML = slots
+    .map((slot) => {
+      const model = slot.model || {};
+      const badge = model.badge || {};
+      const prog = progressFor(model.id, install);
+      const pct = prog?.pct ?? (model.installed ? 100 : 0);
+      const statusText = prog?.status
+        ? prog.status
+        : model.installed
+        ? "установлена"
+        : "не установлена";
+      const selectHtml = slot.selectable
+        ? `<select class="setup-select" data-role="${escapeHtml(slot.role)}" aria-label="Выбор ${escapeHtml(slot.title)}">
+            ${(slot.options || [])
+              .map(
+                (opt) =>
+                  `<option value="${escapeHtml(opt.id)}" ${
+                    opt.id === slot.selected_id ? "selected" : ""
+                  }>${escapeHtml(opt.label)} · ${formatSizeGb(opt.size_gb)}</option>`
+              )
+              .join("")}
+          </select>`
+        : "";
+
+      return `
+        <article class="setup-slot" data-role="${escapeHtml(slot.role)}" data-model="${escapeHtml(model.id || "")}">
+          <div class="setup-slot-top">
+            <div class="setup-slot-meta">
+              <p class="setup-slot-title">${escapeHtml(slot.title)}</p>
+              <p class="setup-slot-name">${escapeHtml(model.label || model.id || "—")}</p>
+              <div class="setup-slot-size">${formatSizeGb(model.size_gb)} · ${escapeHtml(model.id || "")}</div>
+            </div>
+            <span class="setup-badge ${escapeHtml(badge.tone || "neutral")}">${escapeHtml(badge.label || "")}</span>
+            <div class="setup-slot-controls">
+              ${selectHtml}
+              <button
+                class="setup-dl-btn ${model.installed ? "done" : ""}"
+                type="button"
+                data-download="${escapeHtml(model.id || "")}"
+                title="${model.installed ? "Уже установлена" : "Скачать модель"}"
+                aria-label="Скачать ${escapeHtml(model.id || "")}"
+                ${!data.ollama_online || install.running ? "disabled" : ""}
+              >${DL_ICON}</button>
+            </div>
+          </div>
+          <div class="setup-progress" aria-hidden="true"><span style="width:${pct}%"></span></div>
+          <div class="setup-progress-label">${escapeHtml(statusText)}${prog?.pct != null ? ` · ${prog.pct}%` : ""}</div>
+        </article>
+      `;
+    })
+    .join("");
+
+  root.querySelectorAll(".setup-select").forEach((el) => {
+    el.addEventListener("change", async (event) => {
+      const role = event.target.dataset.role;
+      const value = event.target.value;
+      if (role === "llm") setupSelection.llm = value;
+      if (role === "asr") setupSelection.asr = value;
+      await refreshSetupStatus();
+    });
+  });
+
+  root.querySelectorAll("[data-download]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const modelId = btn.getAttribute("data-download");
+      if (!modelId) return;
+      await downloadOneModel(modelId);
+    });
+  });
+}
+
+function renderSetupStatus(data) {
+  setupLatest = data;
+  const hw = data.hardware || {};
+  const tierMeta = data.tier_meta || {};
+  const models = data.models || {};
+  const hwEl = $("setupHardware");
+  const statusEl = $("setupStatus");
+  const installBtn = $("setupInstallBtn");
+  const hero = $("setupHero");
+  const tierBadge = $("setupTierBadge");
+  const tierSubtitle = $("setupTierSubtitle");
+
+  if (!setupSelection.llm) setupSelection.llm = models.llm || "";
+  if (!setupSelection.asr) setupSelection.asr = models.asr || "";
+  if (!setupSelection.embedding) setupSelection.embedding = models.embedding || "";
+  if (!setupSelection.reranker) setupSelection.reranker = models.reranker || "";
+
+  // Синхронизация selection с сервером после смены опции
+  setupSelection.llm = models.llm || setupSelection.llm;
+  setupSelection.asr = models.asr || setupSelection.asr;
+  setupSelection.embedding = models.embedding || setupSelection.embedding;
+  setupSelection.reranker = models.reranker || setupSelection.reranker;
+
+  if (hero) hero.dataset.tone = tierMeta.tone || data.tier || "medium";
+  if (tierBadge) tierBadge.textContent = tierMeta.title || String(data.tier || "").toUpperCase();
+  if (tierSubtitle) {
+    tierSubtitle.textContent =
+      tierMeta.subtitle ||
+      "Рекомендуем модели под мощность вашего компьютера.";
+  }
+
+  if (hwEl) {
+    hwEl.innerHTML = `
+      <li><strong>CPU</strong>${escapeHtml(String(hw.cpu_cores || "?"))} ядер @ ${escapeHtml(String(Math.round(hw.cpu_freq_mhz || 0)))} MHz</li>
+      <li><strong>RAM</strong>${escapeHtml(String(hw.ram_gb || "?"))} GB</li>
+      <li><strong>GPU</strong>${escapeHtml(hw.gpu || "не обнаружен")}</li>
+      <li><strong>VRAM</strong>${escapeHtml(String(hw.vram_gb || 0))} GB</li>
+      <li><strong>Баллы</strong>${escapeHtml(String(hw.score || 0))}</li>
+      <li><strong>RAM нужно</strong>${escapeHtml(String(data.ram_need_gb || 0))} GB</li>
+    `;
+  }
+
+  renderSetupSlots(data);
+
+  if (statusEl) {
+    if (!data.ollama_online) {
+      statusEl.textContent = "Ollama недоступна. Запустите Ollama и обновите страницу.";
+    } else if (data.ready) {
+      statusEl.textContent = "Все выбранные модели установлены.";
+    } else {
+      statusEl.textContent = `Нужно скачать: ${(data.missing || []).join(", ")}`;
+    }
+  }
+
+  if (installBtn) {
+    installBtn.disabled = !data.ollama_online || Boolean(data.install?.running);
+    installBtn.textContent = data.ready
+      ? "Применить выбранные модели"
+      : "Установить выбранные";
+  }
+}
+
+async function refreshSetupStatus() {
+  const params = new URLSearchParams();
+  // selection передаём через POST-like query is awkward; use install/apply body.
+  // For status with selection, call a tiny workaround: send selection via headers? Better add query.
+  // Instead re-fetch with fetch POST to a status endpoint isn't available.
+  // We'll pass selection as query string.
+  if (setupSelection.llm) params.set("llm", setupSelection.llm);
+  if (setupSelection.asr) params.set("asr", setupSelection.asr);
+  const url = `/api/setup/status?${params.toString()}`;
+  const data = await fetch(url).then((r) => r.json());
+  if (data.error) throw new Error(data.error);
+  renderSetupStatus(data);
+  return data;
+}
+
+async function pollInstallUntilDone() {
+  const statusEl = $("setupStatus");
+  const installBtn = $("setupInstallBtn");
+  if (installBtn) installBtn.disabled = true;
+
+  if (setupPollTimer) clearInterval(setupPollTimer);
+  setupPollTimer = setInterval(async () => {
+    try {
+      const install = await fetch("/api/setup/install/status").then((r) => r.json());
+      if (setupLatest) {
+        setupLatest.install = install;
+        renderSetupSlots(setupLatest);
+      }
+      if (statusEl) {
+        statusEl.textContent = install.running
+          ? `Установка: ${install.current || "..."}`
+          : install.finished
+          ? "Установка завершена"
+          : statusEl.textContent;
+      }
+      if (!install.running && install.finished) {
+        clearInterval(setupPollTimer);
+        setupPollTimer = null;
+        const data = await refreshSetupStatus();
+        if (data.ready) {
+          if (statusEl) statusEl.textContent = "Модели установлены и применены.";
+        } else if (installBtn) {
+          installBtn.disabled = false;
+        }
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = `Ошибка опроса: ${e?.message || e}`;
+    }
+  }, 900);
+}
+
+async function downloadOneModel(modelId) {
+  const statusEl = $("setupStatus");
+  try {
+    if (statusEl) statusEl.textContent = `Скачивание ${modelId}...`;
+    const result = await postJSON("/api/setup/install", {
+      models: [modelId],
+      selection: currentSelection(),
+    });
+    if (statusEl) statusEl.textContent = result.message || "Установка запущена";
+    await pollInstallUntilDone();
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `Ошибка: ${e?.message || e}`;
+  }
+}
+
+async function onSetupInstallClick() {
+  const statusEl = $("setupStatus");
+  const installBtn = $("setupInstallBtn");
+  try {
+    if (installBtn) installBtn.disabled = true;
+    const current = await refreshSetupStatus();
+    if (current.ready && !(current.missing || []).length) {
+      const applied = await postJSON("/api/setup/apply", {
+        selection: currentSelection(),
+      });
+      if (statusEl) {
+        statusEl.textContent = `Применено: ${applied.applied?.llm || ""}`;
+      }
+      setSetupSkipped(false);
+      setTimeout(hideSetupOverlay, 700);
+      return;
+    }
+    const result = await postJSON("/api/setup/install", {
+      selection: currentSelection(),
+    });
+    if (statusEl) statusEl.textContent = result.message || "Установка запущена";
+    await pollInstallUntilDone();
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `Ошибка: ${e?.message || e}`;
+    if (installBtn) installBtn.disabled = false;
+  }
+}
+
+async function initSetupFlow() {
+  const overlay = $("setupOverlay");
+  if (!overlay) return;
+
+  $("setupSkipBtn")?.addEventListener("click", () => {
+    setSetupSkipped(true);
+    hideSetupOverlay();
+  });
+  $("setupInstallBtn")?.addEventListener("click", onSetupInstallClick);
+
+  try {
+    const data = await refreshSetupStatus();
+    // Показываем экран, если чего-то не хватает или пользователь ещё не пропускал.
+    if (data.ready && setupSkipped()) {
+      hideSetupOverlay();
+      return;
+    }
+    if (data.ready) {
+      // Даже если всё готово — кратко показать tier/модели один раз, если не skip.
+      showSetupOverlay();
+      return;
+    }
+    setSetupSkipped(false);
+    showSetupOverlay();
+  } catch (e) {
+    showSetupOverlay();
+    const statusEl = $("setupStatus");
+    if (statusEl) statusEl.textContent = `Не удалось получить статус: ${e?.message || e}`;
+  }
+}
+
+initSetupFlow();
+

@@ -7,6 +7,7 @@ import config
 import database
 import fts_index
 import reranker
+from formalizer import formalize_query
 
 _fts_initialized = False
 
@@ -66,9 +67,10 @@ def rrf_ranked_article_keys(query, pool=None):
     if pool is None:
         pool = config.RERANK_POOL_SIZE
     ensure_fts_ready()
-    results = database.search(query, config.VECTOR_TOP_K) or {}
+    search_query = formalize_query(query) or query
+    results = database.search(search_query, config.VECTOR_TOP_K) or {}
     metas = (results.get("metadatas") or [[]])[0]
-    fts_rows = fts_index.fts_search(query, config.FTS_TOP_K)
+    fts_rows = fts_index.fts_search(search_query, config.FTS_TOP_K)
     scores, _ = _rrf_scores(
         metas,
         fts_rows,
@@ -84,6 +86,7 @@ def rrf_ranked_article_keys(query, pool=None):
 @dataclass
 class RetrievalDebug:
     query: str = ""
+    search_query: str = ""
     vector_keys: list = field(default_factory=list)
     fts_keys: list = field(default_factory=list)
     rrf_ranked: list = field(default_factory=list)
@@ -140,12 +143,15 @@ def retrieve_context(
 
     ensure_fts_ready()
 
-    results = database.search(query, config.VECTOR_TOP_K) or {}
+    # Переформулировка только для поиска; исходный query остаётся для LLM выше по стеку.
+    search_query = formalize_query(query) or query
+
+    results = database.search(search_query, config.VECTOR_TOP_K) or {}
     docs = (results.get("documents") or [[]])[0]
     metas = (results.get("metadatas") or [[]])[0]
     dists = (results.get("distances") or [[]])[0]
 
-    fts_rows = fts_index.fts_search(query, config.FTS_TOP_K)
+    fts_rows = fts_index.fts_search(search_query, config.FTS_TOP_K)
 
     scores, _ = _rrf_scores(
         metas,
@@ -162,6 +168,7 @@ def retrieve_context(
 
     debug = RetrievalDebug(
         query=query,
+        search_query=search_query,
         vector_keys=[_article_key(m) for m in metas][:20],
         fts_keys=[(str(r["code"]), str(r["number"])) for r in fts_rows][:20],
         rrf_ranked=list(rrf_ranked),

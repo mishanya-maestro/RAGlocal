@@ -23,6 +23,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
+import autoselect
 import config
 import eval_retrieval as metrics_mod
 from generator import generate_answer, generate_direct_answer
@@ -40,6 +41,15 @@ ASSEMBLYAI_MAX_WAIT_SEC = 180.0
 
 _METRICS_CACHE: dict = {}
 _METRICS_CACHE_TTL_SEC = 600.0
+
+# При старте: анализ железа + применение моделей, если они уже установлены.
+_SETUP_BOOT = autoselect.bootstrap_runtime()
+print(
+    f"autoselect: tier={_SETUP_BOOT.get('tier')} "
+    f"llm={(_SETUP_BOOT.get('models') or {}).get('llm')} "
+    f"ready={_SETUP_BOOT.get('ready')} "
+    f"missing={_SETUP_BOOT.get('missing')}"
+)
 
 
 def _metrics_cache_key(top_k: int, pool: int) -> tuple:
@@ -152,7 +162,74 @@ def index():
         model=config.LLM_MODEL,
         available_modes=["local", "api"],
         voice_stt_ready=bool((config.ASSEMBLYAI_API_KEY or "").strip()),
+        setup_ready=bool(_SETUP_BOOT.get("ready")),
+        setup_tier=_SETUP_BOOT.get("tier") or "",
     )
+
+
+@app.get("/api/setup/status")
+def api_setup_status():
+    try:
+        selection = {
+            "llm": (request.args.get("llm") or "").strip() or None,
+            "asr": (request.args.get("asr") or "").strip() or None,
+        }
+        selection = {k: v for k, v in selection.items() if v}
+        return jsonify(autoselect.get_setup_status(selection=selection or None))
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/setup/install")
+def api_setup_install():
+    data = request.get_json(silent=True) or {}
+    models = data.get("models")
+    selection = data.get("selection")
+    if models is not None and not isinstance(models, list):
+        return jsonify({"error": "models должен быть списком"}), 400
+    if selection is not None and not isinstance(selection, dict):
+        return jsonify({"error": "selection должен быть объектом"}), 400
+    try:
+        # Одна модель по кнопке «скачать»
+        if isinstance(models, list) and len(models) == 1 and not selection:
+            result = autoselect.start_install(models=models)
+        else:
+            result = autoselect.start_install(models=models, selection=selection)
+        status_code = 200 if result.get("ok") else 409
+        return jsonify(result), status_code
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/setup/install/status")
+def api_setup_install_status():
+    return jsonify(autoselect.install_status())
+
+
+@app.post("/api/setup/apply")
+def api_setup_apply():
+    """Применить выбранные/рекомендуемые модели к runtime/.env."""
+    data = request.get_json(silent=True) or {}
+    selection = data.get("selection")
+    if selection is not None and not isinstance(selection, dict):
+        return jsonify({"error": "selection должен быть объектом"}), 400
+    try:
+        status = autoselect.get_setup_status(selection=selection)
+        if status["missing"]:
+            return jsonify(
+                {
+                    "error": "Сначала установите недостающие модели",
+                    "missing": status["missing"],
+                }
+            ), 400
+        applied = autoselect.apply_models_to_config(status["models"])
+        autoselect.write_env(status["models"])
+        return jsonify({"ok": True, "applied": applied})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 @app.get("/source")

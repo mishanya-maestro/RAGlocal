@@ -13,6 +13,37 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
 </head>
 <body>
+  <div id="setupOverlay" class="setup-overlay" hidden>
+    <section class="setup-card" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
+      <div id="setupHero" class="setup-hero" data-tone="medium">
+        <div class="setup-hero-glow" aria-hidden="true"></div>
+        <div class="setup-hero-top">
+          <div>
+            <p class="setup-kicker">Анализ вашего ПК</p>
+            <h2 id="setupTitle">Подбор моделей</h2>
+            <p id="setupTierSubtitle" class="setup-lead"></p>
+          </div>
+          <div id="setupTierBadge" class="setup-tier-badge">MEDIUM</div>
+        </div>
+        <ul id="setupHardware" class="setup-hw-grid"></ul>
+      </div>
+
+      <div class="setup-models-head">
+        <h3>Модели для установки</h3>
+        <p>LLM и Speech-to-text можно сменить. Embedding и Cross encoder фиксированы.</p>
+      </div>
+      <div id="setupSlots" class="setup-slots"></div>
+
+      <div id="setupStatus" class="setup-status"></div>
+      <div class="setup-actions">
+        <button id="setupInstallBtn" class="setup-btn primary" type="button">
+          Установить выбранные
+        </button>
+        <button id="setupSkipBtn" class="setup-btn" type="button">Пропустить</button>
+      </div>
+    </section>
+  </div>
+
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true"></span>
