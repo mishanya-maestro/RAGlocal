@@ -9,6 +9,25 @@ PROJECT_ROOT = _SRC_DIR.parent
 load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv()
 
+# Кэш HuggingFace / Whisper на диск проекта (обычно D:), а не в %USERPROFILE% на C:,
+# где часто заканчивается место.
+HF_CACHE_DIR = Path(
+    os.environ.get("HF_HOME", str(PROJECT_ROOT / ".cache" / "huggingface"))
+)
+HF_HUB_CACHE = Path(
+    os.environ.get(
+        "HUGGINGFACE_HUB_CACHE",
+        str(HF_CACHE_DIR / "hub"),
+    )
+)
+try:
+    HF_HUB_CACHE.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
+os.environ.setdefault("HF_HOME", str(HF_CACHE_DIR))
+os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(HF_HUB_CACHE))
+# ctranslate2 / faster-whisper тоже смотрят на эти переменные через huggingface_hub.
+
 FULLTEXT_DB = Path(os.environ.get("FULLTEXT_DB", str(PROJECT_ROOT / "fulltext.db")))
 CHROMA_PERSIST_DIR = Path(
     os.environ.get("CHROMA_PERSIST_DIR", str(PROJECT_ROOT / "chroma_db"))

@@ -1,12 +1,13 @@
-"""Автоподбор локальных моделей Ollama по железу ПК.
+"""Автоподбор локальных моделей по железу ПК.
 
 Embedding и cross-encoder фиксированы (одна векторная БД).
-Подбираются LLM, STT, температура и max_tokens.
+LLM — через Ollama; STT (Whisper) — через faster-whisper / HuggingFace.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import platform
 import subprocess
 import threading
@@ -85,6 +86,8 @@ ASR_OPTIONS = [
         "size_gb": 0.15,
         "min_tier": "minimal",
         "weight": 1,
+        "backend": "faster-whisper",
+        "fw_name": "base",
     },
     {
         "id": "whisper-small",
@@ -92,6 +95,8 @@ ASR_OPTIONS = [
         "size_gb": 0.5,
         "min_tier": "low",
         "weight": 2,
+        "backend": "faster-whisper",
+        "fw_name": "small",
     },
     {
         "id": "whisper-medium",
@@ -99,6 +104,8 @@ ASR_OPTIONS = [
         "size_gb": 1.5,
         "min_tier": "medium",
         "weight": 3,
+        "backend": "faster-whisper",
+        "fw_name": "medium",
     },
     {
         "id": "whisper-large-v3",
@@ -106,6 +113,8 @@ ASR_OPTIONS = [
         "size_gb": 3.0,
         "min_tier": "high",
         "weight": 4,
+        "backend": "faster-whisper",
+        "fw_name": "large-v3",
     },
 ]
 
@@ -365,24 +374,114 @@ def fit_badge(option: dict[str, Any], pc_tier: str, recommended_id: str) -> dict
     }
 
 
+def _asr_ids() -> set[str]:
+    return {opt["id"] for opt in ASR_OPTIONS}
+
+
+def _is_asr_model(name: str) -> bool:
+    return (name or "").strip() in _asr_ids()
+
+
+def _asr_fw_name(name: str) -> str:
+    opt = _find_option(ASR_OPTIONS, name)
+    if opt and opt.get("fw_name"):
+        return str(opt["fw_name"])
+    raw = (name or "").strip()
+    if raw.startswith("whisper-"):
+        return raw[len("whisper-") :]
+    return raw
+
+
+def _asr_repo_id(name: str) -> str:
+    return f"Systran/faster-whisper-{_asr_fw_name(name)}"
+
+
+def _hf_hub_roots() -> list[Path]:
+    """Каталоги кэша HF: проектный (D:) + старый в профиле (C:)."""
+    roots: list[Path] = []
+    for raw in (
+        os.environ.get("HUGGINGFACE_HUB_CACHE"),
+        str(getattr(config, "HF_HUB_CACHE", "") or ""),
+        str(Path.home() / ".cache" / "huggingface" / "hub"),
+    ):
+        if not raw:
+            continue
+        p = Path(raw)
+        if p not in roots:
+            roots.append(p)
+    return roots
+
+
+def _asr_cache_dir(name: str) -> Path | None:
+    folder = "models--" + _asr_repo_id(name).replace("/", "--")
+    for root in _hf_hub_roots():
+        path = root / folder
+        if path.exists():
+            return path
+    return None
+
+
+def _asr_download_root_for(name: str) -> str | None:
+    """Корень HF hub, где лежит полная модель (проектный D: или старый C:)."""
+    folder = "models--" + _asr_repo_id(name).replace("/", "--")
+    for root in _hf_hub_roots():
+        path = root / folder
+        if path.exists() and _asr_weights_complete(path):
+            return str(root)
+    hub = getattr(config, "HF_HUB_CACHE", None)
+    return str(hub) if hub else None
+
+
+def _asr_weights_complete(path: Path) -> bool:
+    if not path.exists() or not any(path.rglob("config.json")):
+        return False
+    for pattern in ("model.bin", "model.safetensors", "*.bin", "*.safetensors"):
+        for f in path.rglob(pattern):
+            try:
+                if f.is_file() and f.stat().st_size > 10_000_000:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def _asr_installed(name: str) -> bool:
+    """Проверяет, что Whisper полностью в локальном кэше (не обрывок)."""
+    fw_name = _asr_fw_name(name)
+    if not fw_name:
+        return False
+    try:
+        from faster_whisper.utils import download_model
+
+        download_model(fw_name, local_files_only=True)
+        return True
+    except Exception:
+        path = _asr_cache_dir(name)
+        return bool(path and _asr_weights_complete(path))
+
+
 def list_installed_models() -> list[str]:
-    """Список локальных моделей Ollama."""
+    """Список локальных моделей Ollama + установленных Whisper."""
+    names: list[str] = []
     try:
         resp = requests.get(f"{_ollama_base()}/api/tags", timeout=5)
-        if not resp.ok:
-            return []
-        data = resp.json() or {}
-        names = []
-        for item in data.get("models") or []:
-            name = (item.get("name") or item.get("model") or "").strip()
-            if name:
-                names.append(name)
-        return names
+        if resp.ok:
+            data = resp.json() or {}
+            for item in data.get("models") or []:
+                name = (item.get("name") or item.get("model") or "").strip()
+                if name:
+                    names.append(name)
     except Exception:
-        return []
+        pass
+    for opt in ASR_OPTIONS:
+        if _asr_installed(opt["id"]) and opt["id"] not in names:
+            names.append(opt["id"])
+    return names
 
 
 def _model_installed(name: str, installed: list[str] | None = None) -> bool:
+    if _is_asr_model(name):
+        return _asr_installed(name)
     installed = installed if installed is not None else list_installed_models()
     target = name.strip().lower()
     if not target:
@@ -544,7 +643,9 @@ def get_setup_status(selection: dict[str, str] | None = None) -> dict[str, Any]:
         "required": required,
         "missing": missing,
         "ready": len(missing) == 0,
-        "ollama_online": bool(installed) or _ollama_online(),
+        "ollama_online": _ollama_online(),
+        "missing_ollama": [m for m in missing if not _is_asr_model(m)],
+        "missing_asr": [m for m in missing if _is_asr_model(m)],
         "install": dict(_INSTALL_STATE),
         "active": {
             "llm": config.OLLAMA_LLM_MODEL,
@@ -665,7 +766,108 @@ def _set_progress(name: str, **fields: Any) -> None:
     item.update(fields)
 
 
+def _pull_asr_model(name: str) -> None:
+    """Скачивает Whisper через HuggingFace / faster-whisper (не через Ollama)."""
+    import os
+    import shutil
+    import sys
+
+    fw_name = _asr_fw_name(name)
+    repo = _asr_repo_id(name)
+    opt = _find_option(ASR_OPTIONS, name) or {}
+    need_gb = float(opt.get("size_gb") or 1.0) * 1.15
+
+    _INSTALL_STATE["current"] = name
+    _set_progress(name, pct=5, status="starting", done=False, error=None)
+    cache_root = Path(
+        os.environ.get("HUGGINGFACE_HUB_CACHE")
+        or getattr(config, "HF_HUB_CACHE", Path.home() / ".cache" / "huggingface" / "hub")
+    )
+    try:
+        cache_root.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise RuntimeError(f"Не удалось создать кэш STT {cache_root}: {e}") from e
+
+    _append_log(f"Скачивание STT {name} ({repo}) → {cache_root}")
+
+    try:
+        free_gb = shutil.disk_usage(cache_root).free / (1024**3)
+    except Exception:
+        free_gb = None
+    if free_gb is not None and free_gb < need_gb:
+        raise RuntimeError(
+            f"Недостаточно места на диске для {name}: нужно ~{need_gb:.1f} GB, "
+            f"свободно {free_gb:.1f} GB на {cache_root.drive or cache_root}. "
+            f"Освободите место или выберите модель меньше "
+            f"(например whisper-base / whisper-small)."
+        )
+
+    try:
+        from huggingface_hub import snapshot_download
+        from tqdm.auto import tqdm as _tqdm
+    except ImportError as e:
+        raise RuntimeError(
+            "Не установлен faster-whisper / huggingface_hub в интерпретаторе "
+            f"{sys.executable}. Выполните:\n"
+            f'  "{sys.executable}" -m pip install faster-whisper'
+        ) from e
+
+    class _ProgressTqdm(_tqdm):
+        def update(self, n: float | int = 1):  # type: ignore[override]
+            result = super().update(n)
+            total = int(self.total or 0)
+            done = int(self.n or 0)
+            if total > 0:
+                raw = int(done * 100 / total)
+                pct = max(5, min(90, 5 + int(raw * 0.85)))
+                _set_progress(
+                    name,
+                    pct=pct,
+                    status="downloading",
+                    completed=done,
+                    total=total,
+                )
+                if raw % 10 == 0 or raw >= 99:
+                    _append_log(f"{name}: downloading ({raw}%)")
+            return result
+
+    _set_progress(name, pct=8, status="downloading weights")
+    snapshot_download(
+        repo_id=repo,
+        cache_dir=str(cache_root),
+        tqdm_class=_ProgressTqdm,
+    )
+    _set_progress(name, pct=92, status="verifying")
+
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as e:
+        raise RuntimeError(
+            "Не установлен faster-whisper в интерпретаторе "
+            f"{sys.executable}. Выполните:\n"
+            f'  "{sys.executable}" -m pip install faster-whisper'
+        ) from e
+
+    # Прогрев/проверка: модель реально загружается из кэша.
+    WhisperModel(
+        fw_name,
+        device="cpu",
+        compute_type="int8",
+        download_root=str(cache_root),
+        local_files_only=True,
+    )
+    if not _asr_installed(name):
+        raise RuntimeError(f"После скачивания {name} не прошла проверку локального кэша")
+    _INSTALL_STATE["done"].append(name)
+    _set_progress(name, pct=100, status="success", done=True)
+    _append_log(f"Готово: {name}")
+
+
 def _pull_model(name: str) -> None:
+    if _is_asr_model(name):
+        _pull_asr_model(name)
+        return
+
     _INSTALL_STATE["current"] = name
     _set_progress(name, pct=0, status="starting", done=False, error=None)
     _append_log(f"Скачивание {name}...")
@@ -687,7 +889,6 @@ def _pull_model(name: str) -> None:
             status = event.get("status") or ""
             completed = event.get("completed")
             total = event.get("total")
-            pct = 0
             if total and completed is not None and total > 0:
                 pct = int(completed * 100 / total)
                 _set_progress(
@@ -764,11 +965,14 @@ def start_install(
             }
 
         if not _ollama_online():
-            return {
-                "ok": False,
-                "error": "Ollama недоступна. Запустите Ollama и повторите.",
-                "install": dict(_INSTALL_STATE),
-            }
+            ollama_needed = [m for m in (models or get_setup_status()["missing"]) if not _is_asr_model(m)]
+            # Для чисто STT-установки Ollama не обязательна.
+            if ollama_needed:
+                return {
+                    "ok": False,
+                    "error": "Ollama недоступна. Запустите Ollama и повторите.",
+                    "install": dict(_INSTALL_STATE),
+                }
 
         resolved = resolve_selection(selection)
         to_install = models or [
@@ -784,6 +988,13 @@ def start_install(
                 "install": dict(_INSTALL_STATE),
             }
 
+        ollama_needed = [m for m in to_install if not _is_asr_model(m)]
+        if ollama_needed and not _ollama_online():
+            return {
+                "ok": False,
+                "error": "Ollama недоступна. Запустите Ollama и повторите.",
+                "install": dict(_INSTALL_STATE),
+            }
         progress = {
             name: {
                 "pct": 0,
@@ -825,9 +1036,24 @@ def install_status() -> dict[str, Any]:
 def bootstrap_runtime() -> dict[str, Any]:
     """При старте приложения подбирает модели и применяет, если они уже есть."""
     status = get_setup_status()
-    models = status["models"]
+    models = dict(status["models"] or {})
+    asr = (models.get("asr") or "").strip()
+    # Если в .env указана недокачанная STT — переключаемся на любую полностью локальную.
+    if asr and not _asr_installed(asr):
+        for opt in ASR_OPTIONS:
+            if _asr_installed(opt["id"]):
+                models["asr"] = opt["id"]
+                status = get_setup_status(selection=models)
+                break
     if status["ready"]:
-        apply_models_to_config(models)
+        applied = apply_models_to_config(models)
+        if asr and applied.get("asr") != asr:
+            write_env(models)
+    elif models.get("asr") and models.get("asr") != asr:
+        # Хотя бы рабочий STT в runtime, даже если LLM ещё не готов.
+        resolved = resolve_selection(models)
+        apply_models_to_config(resolved)
+        write_env(resolved)
     return status
 
 

@@ -1,6 +1,7 @@
-/chroma_db_new/
-/.env
 /.venv/
+/.cache/
 /__pycache__/
 __pycache__/
 /cli.py/
+/chroma_db_new/
+/.env

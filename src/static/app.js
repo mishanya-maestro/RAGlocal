@@ -275,12 +275,14 @@ function closeAllDropdowns(except) {
 }
 
 function initDropdown(rootEl) {
+  if (rootEl.dataset.ddInit === "1") return;
   const trigger = rootEl.querySelector(".mode-dd-trigger");
   const menu = rootEl.querySelector(".mode-dd-menu");
   const label = rootEl.querySelector(".mode-dd-label");
   if (!trigger || !menu || !label) return;
 
   menu.removeAttribute("hidden");
+  rootEl.dataset.ddInit = "1";
 
   trigger.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -297,33 +299,59 @@ function initDropdown(rootEl) {
 
   menu.addEventListener("click", (event) => {
     event.stopPropagation();
-  });
-
-  menu.querySelectorAll(".mode-dd-option").forEach((opt) => {
-    opt.addEventListener("click", () => {
-      const value = opt.dataset.value;
-      rootEl.dataset.value = value;
-      label.textContent = opt.textContent.trim();
-      menu.querySelectorAll(".mode-dd-option").forEach((o) => {
-        o.setAttribute("aria-selected", o === opt ? "true" : "false");
-      });
-      rootEl.classList.remove("open");
-      trigger.setAttribute("aria-expanded", "false");
-      rootEl.dispatchEvent(
-        new CustomEvent("mode-dd:change", {
-          detail: { value },
-          bubbles: true,
-        })
-      );
+    const opt = event.target.closest(".mode-dd-option");
+    if (!opt || !menu.contains(opt)) return;
+    const value = opt.dataset.value;
+    rootEl.dataset.value = value;
+    label.textContent = (opt.dataset.label || opt.textContent).trim();
+    menu.querySelectorAll(".mode-dd-option").forEach((o) => {
+      o.setAttribute("aria-selected", o === opt ? "true" : "false");
     });
+    rootEl.classList.remove("open");
+    trigger.setAttribute("aria-expanded", "false");
+    rootEl.dispatchEvent(
+      new CustomEvent("mode-dd:change", {
+        detail: {
+          value,
+          installed: opt.dataset.installed !== "false",
+          label: (opt.dataset.label || opt.textContent).trim(),
+        },
+        bubbles: true,
+      })
+    );
   });
 }
 
-function syncChatTypeLayout() {
-  const main = $("appMain");
-  if (!main) return;
-  main.dataset.chatType = getDDValue("chatType") || "normal";
+function setDropdownOptions(rootEl, options, selectedId) {
+  if (!rootEl) return;
+  const menu = rootEl.querySelector(".mode-dd-menu");
+  const label = rootEl.querySelector(".mode-dd-label");
+  if (!menu || !label) return;
+  const list = options || [];
+  const selected =
+    list.find((o) => o.id === selectedId) || list.find((o) => o.selected) || list[0];
+  menu.innerHTML = list
+    .map((opt) => {
+      const isSel = selected && opt.id === selected.id;
+      const installed = opt.installed !== false;
+      const mark = installed ? "" : " · ↓";
+      const cleanLabel = opt.label || opt.id;
+      return `<button type="button" class="mode-dd-option" role="option" data-value="${escapeHtml(
+        opt.id
+      )}" data-label="${escapeHtml(cleanLabel)}" data-installed="${
+        installed ? "true" : "false"
+      }" aria-selected="${isSel ? "true" : "false"}">${escapeHtml(
+        cleanLabel
+      )}${mark}</button>`;
+    })
+    .join("");
+  if (selected) {
+    rootEl.dataset.value = selected.id;
+    label.textContent = selected.label || selected.id;
+  }
+  initDropdown(rootEl);
 }
+
 
 function getDDValue(id) {
   const el = $(id);
@@ -342,7 +370,6 @@ async function sendQuery() {
   if (isLoading) return;
   const q = $("chatInput").value.trim();
   const transportMode = (getDDValue("transportMode") || "").toLowerCase();
-  const chatType = getDDValue("chatType") || "normal";
   $("chatStatus").textContent = "";
 
   if (!q) {
@@ -355,24 +382,16 @@ async function sendQuery() {
   autosizeInput();
   const loaderMsg = appendAssistantLoading();
   setLoading(true);
-  $("chatStatus").textContent =
-    chatType === "compare"
-      ? `Сравниваю ответы (${transportMode})...`
-      : `Генерирую ответ (${transportMode})...`;
+  $("chatStatus").textContent = `Генерирую ответ (${transportMode})...`;
 
   try {
-    const endpoint = chatType === "compare" ? "/api/compare" : "/api/ask";
-    const data = await postJSON(endpoint, { query: q, mode: transportMode });
-    const html =
-      chatType === "compare"
-        ? renderCompareResponse(data)
-        : renderNormalResponse(data);
-    loaderMsg.innerHTML = html;
+    const data = await postJSON("/api/ask", { query: q, mode: transportMode });
+    loaderMsg.innerHTML = renderNormalResponse(data);
     initCollapsibles(loaderMsg);
     pushHistory({ role: "user", text: q });
     pushHistory({
       role: "assistant",
-      kind: chatType === "compare" ? "compare" : "normal",
+      kind: "normal",
       data,
     });
     $("chatStatus").textContent = `Готово (${data.mode || transportMode}).`;
@@ -472,8 +491,152 @@ $("newChatBtn").addEventListener("click", () => {
 
 document.querySelectorAll(".mode-dd").forEach(initDropdown);
 
-$("chatType")?.addEventListener("mode-dd:change", syncChatTypeLayout);
-syncChatTypeLayout();
+function syncComposerModelDropdowns(data) {
+  if (!data) return;
+  const slots = data.slots || [];
+  const llmSlot = slots.find((s) => s.role === "llm");
+  const asrSlot = slots.find((s) => s.role === "asr");
+  // В композере показываем фактически применённые модели, а не черновик setup.
+  const models = data.active || data.models || {};
+  if (llmSlot) {
+    setDropdownOptions($("llmModel"), llmSlot.options || [], models.llm || llmSlot.selected_id);
+  }
+  if (asrSlot) {
+    setDropdownOptions($("asrModel"), asrSlot.options || [], models.asr || asrSlot.selected_id);
+  }
+  if (models.llm || models.asr) {
+    committedModels = {
+      llm: models.llm || committedModels.llm || "",
+      asr: models.asr || committedModels.asr || "",
+      embedding: models.embedding || committedModels.embedding || setupSelection.embedding || "",
+      reranker: models.reranker || committedModels.reranker || setupSelection.reranker || "",
+    };
+  }
+  const mic = micEl();
+  if (mic) {
+    const asrId = models.asr || "";
+    const asrOpt = (asrSlot?.options || []).find((o) => o.id === asrId);
+    const asrReady = Boolean(asrOpt?.installed);
+    mic.dataset.sttReady = asrReady ? "true" : "false";
+  }
+}
+
+async function applyComposerModelSelection(role, modelId, installed) {
+  if (!modelId) return;
+
+  if (!installed) {
+    pendingComposerInstall = {
+      role,
+      modelId,
+      previous: { ...committedModels },
+    };
+    setupSelection = {
+      llm: role === "llm" ? modelId : committedModels.llm || setupSelection.llm,
+      asr: role === "asr" ? modelId : committedModels.asr || setupSelection.asr,
+      embedding: committedModels.embedding || setupSelection.embedding,
+      reranker: committedModels.reranker || setupSelection.reranker,
+    };
+    setSetupSkipped(false);
+    showSetupOverlay();
+    const statusEl = $("setupStatus");
+    if (statusEl) statusEl.textContent = `Нужно скачать: ${modelId}`;
+    try {
+      await refreshSetupStatus();
+    } catch (_e) {
+      /* overlay already shown */
+    }
+    // В композере сразу возвращаем прежний выбор (окно установки открыто отдельно).
+    restoreCommittedComposerSelection();
+    return;
+  }
+
+  pendingComposerInstall = null;
+  if (role === "llm") setupSelection.llm = modelId;
+  if (role === "asr") setupSelection.asr = modelId;
+  setupSelection.llm = setupSelection.llm || committedModels.llm;
+  setupSelection.asr = setupSelection.asr || committedModels.asr;
+  setupSelection.embedding = setupSelection.embedding || committedModels.embedding;
+  setupSelection.reranker = setupSelection.reranker || committedModels.reranker;
+
+  try {
+    const applied = await postJSON("/api/setup/apply", {
+      selection: currentSelection(),
+    });
+    committedModels = {
+      llm: applied.applied?.llm || setupSelection.llm,
+      asr: applied.applied?.asr || setupSelection.asr,
+      embedding: applied.applied?.embedding || setupSelection.embedding,
+      reranker: applied.applied?.reranker || setupSelection.reranker,
+    };
+    const status = $("chatStatus");
+    if (status) {
+      status.textContent =
+        role === "llm"
+          ? `LLM: ${committedModels.llm || modelId}`
+          : `STT: ${committedModels.asr || modelId}`;
+      setTimeout(() => {
+        if (status.textContent.startsWith("LLM:") || status.textContent.startsWith("STT:")) {
+          status.textContent = "";
+        }
+      }, 1800);
+    }
+    if (role === "asr") {
+      const btn = micEl();
+      if (btn) btn.dataset.sttReady = "true";
+    }
+  } catch (e) {
+    restoreCommittedComposerSelection();
+    const status = $("chatStatus");
+    if (status) status.textContent = `Не удалось применить модель: ${e?.message || e}`;
+  }
+}
+
+function restoreCommittedComposerSelection() {
+  setupSelection = {
+    llm: committedModels.llm || setupSelection.llm,
+    asr: committedModels.asr || setupSelection.asr,
+    embedding: committedModels.embedding || setupSelection.embedding,
+    reranker: committedModels.reranker || setupSelection.reranker,
+  };
+  if (setupLatest) {
+    const view = {
+      ...setupLatest,
+      active: {
+        ...(setupLatest.active || {}),
+        llm: committedModels.llm,
+        asr: committedModels.asr,
+        embedding: committedModels.embedding,
+        reranker: committedModels.reranker,
+      },
+    };
+    syncComposerModelDropdowns(view);
+    return;
+  }
+  setDropdownValueLabel($("llmModel"), committedModels.llm);
+  setDropdownValueLabel($("asrModel"), committedModels.asr);
+}
+
+function setDropdownValueLabel(rootEl, value) {
+  if (!rootEl || !value) return;
+  const menu = rootEl.querySelector(".mode-dd-menu");
+  const label = rootEl.querySelector(".mode-dd-label");
+  const escaped = window.CSS?.escape
+    ? CSS.escape(value)
+    : String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const opt = menu?.querySelector(`.mode-dd-option[data-value="${escaped}"]`);
+  rootEl.dataset.value = value;
+  if (label) label.textContent = opt?.dataset.label || opt?.textContent?.trim() || value;
+  menu?.querySelectorAll(".mode-dd-option").forEach((o) => {
+    o.setAttribute("aria-selected", o.dataset.value === value ? "true" : "false");
+  });
+}
+
+$("llmModel")?.addEventListener("mode-dd:change", (event) => {
+  applyComposerModelSelection("llm", event.detail?.value, event.detail?.installed !== false);
+});
+$("asrModel")?.addEventListener("mode-dd:change", (event) => {
+  applyComposerModelSelection("asr", event.detail?.value, event.detail?.installed !== false);
+});
 
 restoreHistory();
 autosizeInput();
@@ -553,7 +716,7 @@ async function startMicRecording() {
 
   if (btn.dataset.sttReady === "false") {
     $("chatStatus").textContent =
-      "Голосовой ввод недоступен: добавьте ASSEMBLYAI_API_KEY в .env и перезапустите сервер.";
+      "Голосовой ввод недоступен: скачайте Whisper в окне моделей (лучше whisper-base, если мало места на диске).";
     return;
   }
 
@@ -659,6 +822,8 @@ micEl()?.addEventListener("click", startMicRecording);
 const SETUP_SKIP_KEY = "rag.setup.skip.v1";
 let setupPollTimer = null;
 let setupSelection = { llm: "", asr: "", embedding: "", reranker: "" };
+let committedModels = { llm: "", asr: "", embedding: "", reranker: "" };
+let pendingComposerInstall = null;
 let setupLatest = null;
 
 const DL_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -748,6 +913,12 @@ function renderSetupSlots(data) {
           </select>`
         : "";
 
+      const needsOllama = slot.role !== "asr";
+      const canDownload =
+        Boolean(model.id) &&
+        !install.running &&
+        (data.ollama_online || !needsOllama);
+
       return `
         <article class="setup-slot" data-role="${escapeHtml(slot.role)}" data-model="${escapeHtml(model.id || "")}">
           <div class="setup-slot-top">
@@ -765,7 +936,7 @@ function renderSetupSlots(data) {
                 data-download="${escapeHtml(model.id || "")}"
                 title="${model.installed ? "Уже установлена" : "Скачать модель"}"
                 aria-label="Скачать ${escapeHtml(model.id || "")}"
-                ${!data.ollama_online || install.running ? "disabled" : ""}
+                ${!canDownload ? "disabled" : ""}
               >${DL_ICON}</button>
             </div>
           </div>
@@ -840,21 +1011,30 @@ function renderSetupStatus(data) {
   renderSetupSlots(data);
 
   if (statusEl) {
-    if (!data.ollama_online) {
+    const missingOllama = data.missing_ollama || [];
+    const missingAsr = data.missing_asr || [];
+    if (!data.ollama_online && missingOllama.length) {
       statusEl.textContent = "Ollama недоступна. Запустите Ollama и обновите страницу.";
     } else if (data.ready) {
       statusEl.textContent = "Все выбранные модели установлены.";
     } else {
       statusEl.textContent = `Нужно скачать: ${(data.missing || []).join(", ")}`;
+      if (!data.ollama_online && missingAsr.length && !missingOllama.length) {
+        statusEl.textContent = `Скачайте STT (Ollama не нужна): ${missingAsr.join(", ")}`;
+      }
     }
   }
 
   if (installBtn) {
-    installBtn.disabled = !data.ollama_online || Boolean(data.install?.running);
+    const needsOllama = (data.missing_ollama || []).length > 0;
+    installBtn.disabled =
+      Boolean(data.install?.running) || (needsOllama && !data.ollama_online);
     installBtn.textContent = data.ready
       ? "Применить выбранные модели"
       : "Установить выбранные";
   }
+
+  syncComposerModelDropdowns(data);
 }
 
 async function refreshSetupStatus() {
@@ -898,6 +1078,7 @@ async function pollInstallUntilDone() {
         const data = await refreshSetupStatus();
         if (data.ready) {
           if (statusEl) statusEl.textContent = "Модели установлены и применены.";
+          setTimeout(hideSetupOverlay, 800);
         } else if (installBtn) {
           installBtn.disabled = false;
         }
@@ -957,6 +1138,13 @@ async function initSetupFlow() {
 
   $("setupSkipBtn")?.addEventListener("click", () => {
     setSetupSkipped(true);
+    if (pendingComposerInstall?.previous) {
+      committedModels = { ...committedModels, ...pendingComposerInstall.previous };
+      pendingComposerInstall = null;
+    }
+    restoreCommittedComposerSelection();
+    // Черновик setup тоже откатываем к рабочим моделям.
+    setupSelection = { ...committedModels };
     hideSetupOverlay();
   });
   $("setupInstallBtn")?.addEventListener("click", onSetupInstallClick);

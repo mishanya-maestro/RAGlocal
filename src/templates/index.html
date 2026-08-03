@@ -79,19 +79,6 @@
           <div class="composer-left">
             <span class="composer-mark" aria-hidden="true"></span>
 
-            <div id="chatType" class="mode-dd" data-value="normal">
-              <button type="button" class="mode-dd-trigger" aria-haspopup="listbox" aria-expanded="false">
-                <span class="mode-dd-label">Обычный</span>
-                <svg class="mode-dd-chevron" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
-                  <path fill="currentColor" d="M2 4.5l4 4 4-4z"></path>
-                </svg>
-              </button>
-              <div class="mode-dd-menu" role="listbox" hidden>
-                <button type="button" class="mode-dd-option" role="option" data-value="normal" aria-selected="true">Обычный</button>
-                <button type="button" class="mode-dd-option" role="option" data-value="compare" aria-selected="false">Сравнение</button>
-              </div>
-            </div>
-
             <div id="transportMode" class="mode-dd" data-value="{{ mode }}">
               <button type="button" class="mode-dd-trigger" aria-haspopup="listbox" aria-expanded="false">
                 <span class="mode-dd-label">{{ mode|upper }}</span>
@@ -110,6 +97,26 @@
                 >{{ m|upper }}</button>
                 {% endfor %}
               </div>
+            </div>
+
+            <div id="llmModel" class="mode-dd" data-value="">
+              <button type="button" class="mode-dd-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="mode-dd-label">LLM</span>
+                <svg class="mode-dd-chevron" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+                  <path fill="currentColor" d="M2 4.5l4 4 4-4z"></path>
+                </svg>
+              </button>
+              <div class="mode-dd-menu" role="listbox" hidden></div>
+            </div>
+
+            <div id="asrModel" class="mode-dd" data-value="">
+              <button type="button" class="mode-dd-trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="mode-dd-label">STT</span>
+                <svg class="mode-dd-chevron" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+                  <path fill="currentColor" d="M2 4.5l4 4 4-4z"></path>
+                </svg>
+              </button>
+              <div class="mode-dd-menu" role="listbox" hidden></div>
             </div>
 
             <button

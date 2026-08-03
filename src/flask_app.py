@@ -1,13 +1,64 @@
 """
-py -3 src/flask_app.py
+Запуск:
+  run.bat
+  .\\.venv\\Scripts\\python.exe src/flask_app.py
+
 http://127.0.0.1:5000
 """
 
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
+
+
+def _reexec_with_project_venv_if_needed() -> None:
+    """Если запустили системным Python без faster-whisper — перезапуск через .venv."""
+    if os.environ.get("RAG_SKIP_VENV_REEXEC") == "1":
+        return
+
+    root = Path(__file__).resolve().parent.parent
+    if sys.platform == "win32":
+        venv_python = root / ".venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = root / ".venv" / "bin" / "python"
+
+    if not venv_python.is_file():
+        return
+
+    current = Path(sys.executable).resolve()
+    target = venv_python.resolve()
+    if current == target:
+        return
+
+    # Уже в этом venv (иногда executable отличается, смотрим prefix).
+    try:
+        if Path(sys.prefix).resolve() == (root / ".venv").resolve():
+            return
+    except OSError:
+        pass
+
+    try:
+        import faster_whisper  # noqa: F401
+
+        return
+    except ImportError:
+        pass
+
+    print(
+        f"faster-whisper нет в {current}\n"
+        f"Перезапуск через venv: {target}"
+    )
+    os.environ["RAG_SKIP_VENV_REEXEC"] = "1"
+    os.execv(str(target), [str(target), *sys.argv])
+
+
+_reexec_with_project_venv_if_needed()
+
 import re
 import sqlite3
-import sys
+import tempfile
 import time
 import traceback
 
@@ -50,6 +101,17 @@ print(
     f"ready={_SETUP_BOOT.get('ready')} "
     f"missing={_SETUP_BOOT.get('missing')}"
 )
+print(f"python: {sys.executable}")
+try:
+    import faster_whisper as _fw  # noqa: F401
+
+    print("faster-whisper: OK")
+except ImportError:
+    print(
+        "faster-whisper: НЕ НАЙДЕН в этом Python. "
+        "Запускайте через .venv:\\Scripts\\python.exe src\\flask_app.py "
+        "или run.bat"
+    )
 
 
 def _metrics_cache_key(top_k: int, pool: int) -> tuple:
@@ -59,6 +121,152 @@ def _metrics_cache_key(top_k: int, pool: int) -> tuple:
     except OSError:
         mtime = 0.0
     return (top_k, pool, mtime)
+
+
+_WHISPER_CACHE: dict[str, object] = {}
+
+
+def _voice_stt_ready() -> bool:
+    asr = (getattr(config, "ASR_MODEL", "") or "").strip()
+    if asr and autoselect._is_asr_model(asr) and autoselect._asr_installed(asr):
+        return True
+    return bool((config.ASSEMBLYAI_API_KEY or "").strip())
+
+
+def _guess_audio_suffix(filename: str) -> str:
+    lower = (filename or "").lower()
+    for ext in (".wav", ".mp3", ".m4a", ".ogg", ".webm", ".mp4", ".mpeg", ".mpga"):
+        if lower.endswith(ext):
+            return ext
+    return ".webm"
+
+
+def _write_temp_bytes(data: bytes, suffix: str) -> str:
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(data)
+        return tmp.name
+
+
+def _convert_audio_to_wav16k(src_path: str) -> str:
+    """Декодирует произвольное аудио в WAV 16 kHz mono. Возвращает путь к wav."""
+    import wave
+
+    import av
+    import numpy as np
+
+    wav_fd, wav_path = tempfile.mkstemp(suffix=".wav")
+    os.close(wav_fd)
+    try:
+        container = av.open(src_path)
+        try:
+            stream = next((s for s in container.streams if s.type == "audio"), None)
+            if stream is None:
+                raise RuntimeError("В записи нет аудиодорожки")
+            resampler = av.audio.resampler.AudioResampler(
+                format="s16", layout="mono", rate=16000
+            )
+            chunks: list = []
+            for frame in container.decode(stream):
+                for out in resampler.resample(frame):
+                    arr = out.to_ndarray()
+                    if arr.ndim > 1:
+                        arr = arr.reshape(-1)
+                    chunks.append(np.asarray(arr, dtype=np.int16))
+            for out in resampler.resample(None):
+                arr = out.to_ndarray()
+                if arr.ndim > 1:
+                    arr = arr.reshape(-1)
+                chunks.append(np.asarray(arr, dtype=np.int16))
+        finally:
+            container.close()
+
+        if not chunks:
+            raise RuntimeError("Пустая аудиодорожка после декодирования")
+
+        pcm = np.concatenate(chunks)
+        with wave.open(wav_path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(pcm.tobytes())
+        return wav_path
+    except Exception:
+        try:
+            os.unlink(wav_path)
+        except OSError:
+            pass
+        raise
+
+
+def _local_whisper_transcribe_bytes(audio_bytes: bytes, filename: str = "") -> str:
+    """Локальный STT через faster-whisper."""
+    asr = (getattr(config, "ASR_MODEL", "") or "").strip()
+    if not asr or not autoselect._is_asr_model(asr):
+        raise RuntimeError("Локальная Whisper-модель не выбрана")
+    if not autoselect._asr_installed(asr):
+        raise RuntimeError(
+            f"Модель {asr} не установлена полностью (часто из‑за нехватки места на диске). "
+            "В окне моделей скачайте whisper-base / whisper-small или освободите место "
+            "и переустановите выбранную модель."
+        )
+
+    fw_name = autoselect._asr_fw_name(asr)
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as e:
+        raise RuntimeError(
+            "Не установлен faster-whisper в интерпретаторе "
+            f"{sys.executable}. Выполните:\n"
+            f'  "{sys.executable}" -m pip install faster-whisper'
+        ) from e
+
+    hub_cache = autoselect._asr_download_root_for(asr)
+    model = _WHISPER_CACHE.get(fw_name)
+    if model is None:
+        try:
+            kwargs = {
+                "device": "cpu",
+                "compute_type": "int8",
+                "local_files_only": True,
+            }
+            if hub_cache:
+                kwargs["download_root"] = hub_cache
+            model = WhisperModel(fw_name, **kwargs)
+        except Exception as e:
+            raise RuntimeError(
+                f"Не удалось загрузить {asr} из локального кэша: {e}. "
+                "Скачайте модель заново в окне установки."
+            ) from e
+        _WHISPER_CACHE[fw_name] = model
+
+    suffix = _guess_audio_suffix(filename)
+    src_path = _write_temp_bytes(audio_bytes, suffix)
+    wav_path = ""
+    audio_path = src_path
+    try:
+        try:
+            wav_path = _convert_audio_to_wav16k(src_path)
+            audio_path = wav_path
+        except Exception:
+            # Whisper/ctranslate2 иногда съедают исходный webm сами.
+            audio_path = src_path
+
+        try:
+            segments, _info = model.transcribe(
+                audio_path, language="ru", vad_filter=True
+            )
+        except Exception:
+            segments, _info = model.transcribe(
+                audio_path, language="ru", vad_filter=False
+            )
+        return " ".join((seg.text or "").strip() for seg in segments).strip()
+    finally:
+        for p in (src_path, wav_path):
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
 
 def _assemblyai_transcribe_bytes(audio_bytes: bytes) -> str:
@@ -161,7 +369,7 @@ def index():
         mode=config.MODE,
         model=config.LLM_MODEL,
         available_modes=["local", "api"],
-        voice_stt_ready=bool((config.ASSEMBLYAI_API_KEY or "").strip()),
+        voice_stt_ready=_voice_stt_ready(),
         setup_ready=bool(_SETUP_BOOT.get("ready")),
         setup_tier=_SETUP_BOOT.get("tier") or "",
     )
@@ -349,9 +557,19 @@ def api_metrics():
 @app.post("/api/transcribe")
 def api_transcribe():
     """Speech-to-text: multipart поле `audio` (webm, mp3, m4a и т.д.)."""
-    if not (config.ASSEMBLYAI_API_KEY or "").strip():
+    asr = (getattr(config, "ASR_MODEL", "") or "").strip()
+    use_local = bool(
+        asr and autoselect._is_asr_model(asr) and autoselect._asr_installed(asr)
+    )
+    use_cloud = bool((config.ASSEMBLYAI_API_KEY or "").strip())
+    if not use_local and not use_cloud:
         return jsonify(
-            {"error": "Добавьте ASSEMBLYAI_API_KEY в .env для распознавания речи."}
+            {
+                "error": (
+                    "Установите Whisper в окне моделей или добавьте "
+                    "ASSEMBLYAI_API_KEY в .env."
+                )
+            }
         ), 503
 
     if "audio" not in request.files:
@@ -366,7 +584,12 @@ def api_transcribe():
         return jsonify({"error": "Пустое аудио"}), 400
 
     try:
-        text = _assemblyai_transcribe_bytes(audio_bytes)
+        if use_local:
+            text = _local_whisper_transcribe_bytes(
+                audio_bytes, filename=f.filename or ""
+            )
+        else:
+            text = _assemblyai_transcribe_bytes(audio_bytes)
         return jsonify({"text": text})
     except Exception as e:
         traceback.print_exc()
