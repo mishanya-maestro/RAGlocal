@@ -80,7 +80,7 @@ def _build_context(rows, metadata) -> str:
     return "\n\n".join(parts)
 
 
-def _resolve_llm_transport(mode_override: str | None):
+def _resolve_llm_transport(mode_override: str | None, model_override: str | None = None):
     mode = (mode_override or config.MODE or "api").strip().lower()
     if mode == "ollama":
         mode = "local"
@@ -91,7 +91,7 @@ def _resolve_llm_transport(mode_override: str | None):
         return (
             config.OLLAMA_BASE_URL + "/chat/completions",
             {"Content-Type": "application/json"},
-            config.OLLAMA_LLM_MODEL,
+            model_override or config.OLLAMA_LLM_MODEL,
             "local",
         )
     if mode == "api":
@@ -103,7 +103,7 @@ def _resolve_llm_transport(mode_override: str | None):
         return (
             config.OPENROUTER_BASE_URL,
             headers,
-            config.OPENROUTER_LLM_MODEL,
+            model_override or config.OPENROUTER_LLM_MODEL,
             "api",
         )
 
@@ -111,7 +111,7 @@ def _resolve_llm_transport(mode_override: str | None):
     return (
         config.BASE_URL1,
         config.HEADERS1,
-        config.LLM_MODEL,
+        model_override or config.LLM_MODEL,
         config.MODE,
     )
 
@@ -193,8 +193,13 @@ def _call_ollama_native(
     return _clean_llm_output(msg.get("content") or data.get("response") or "")
 
 
-def _call_llm(system_prompt: str, user_prompt: str, mode_override: str | None = None) -> str:
-    url, headers, model, mode_name = _resolve_llm_transport(mode_override)
+def _call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    mode_override: str | None = None,
+    model_override: str | None = None,
+) -> str:
+    url, headers, model, mode_name = _resolve_llm_transport(mode_override, model_override)
     system_prompt, user_prompt = _prepare_prompt_for_model(
         system_prompt, user_prompt, mode_name, model
     )

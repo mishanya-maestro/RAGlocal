@@ -120,7 +120,7 @@ def _build_match_query(user_query: str, max_tokens: int = 16) -> str | None:
     return " OR ".join(f'"{_escape_fts_token(t)}"' for t in meaningful)
 
 
-def fts_search(query: str, limit: int) -> list[dict]:
+def fts_search(query: str, limit: int, filter_codes: list[str] | None = None) -> list[dict]:
     """Возвращает [{code, number, bm25, snippet}] от лучшего совпадения к худшему."""
     match_q = _build_match_query(query)
     if not match_q:
@@ -136,17 +136,27 @@ def fts_search(query: str, limit: int) -> list[dict]:
         if cur.fetchone() is None:
             return []
 
+        where_clauses = [f"{_FTS_TABLE} MATCH ?"]
+        params: list[Any] = [match_q]
+        if filter_codes:
+            placeholders = ",".join("?" for _ in filter_codes)
+            where_clauses.append(f"code IN ({placeholders})")
+            params.extend(filter_codes)
+
+        where_sql = " AND ".join(where_clauses)
+        params.append(limit)
+
         try:
             cur.execute(
                 f"""
                 SELECT code, number, bm25({_FTS_TABLE}) AS r,
                        snippet({_FTS_TABLE}, 2, '«', '»', '…', 18) AS snip
                 FROM {_FTS_TABLE}
-                WHERE {_FTS_TABLE} MATCH ?
+                WHERE {where_sql}
                 ORDER BY r
                 LIMIT ?
                 """,
-                (match_q, limit),
+                tuple(params),
             )
         except sqlite3.OperationalError as e:
             print(f"fts_search MATCH error: {e}; q={match_q!r}")

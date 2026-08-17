@@ -2,17 +2,8 @@
 import config
 import database
 import generate_fulltext as ft_rebuild
-from parser import  parse_articles
-CODE_NAMES=["OMMrb",
-            "IZKrb",
-            "KONrb",
-            "OGOrb",
-            "ONSrb",
-            "OOGrb",
-            "OOOrb",
-            "OPPrb",
-            "OVNrb",
-            "SMIrb"]
+from parser import CODE_NAMES, parse_articles
+
 
 def collect_articles():
     data_dir = config.PROJECT_ROOT / "data"

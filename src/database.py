@@ -80,7 +80,7 @@ def _embed_text(code, number, chunk_idx, total_chunks, body):
 
 
 def add_articles(articles, reset_collection: bool = False):
-    """индексирует статьи"""
+    """индексирует статьи с пакетными эмбеддингами."""
     global collection
     if reset_collection:
         try:
@@ -94,18 +94,20 @@ def add_articles(articles, reset_collection: bool = False):
     for i, article in enumerate(articles):
         chunks = chunk_text(article["text"])
         total = len(chunks)
+        short_code = article.get("short_code", "")
 
-        for chunk_idx, body in enumerate(chunks):
-            embed_text = _embed_text(
-                article["code"], article["number"], chunk_idx, total, body
-            )
-            vector = embeddings.get_embedding(embed_text)
+        embed_texts = [
+            _embed_text(article["code"], article["number"], chunk_idx, total, body)
+            for chunk_idx, body in enumerate(chunks)
+        ]
+        vectors = embeddings.get_embeddings(embed_texts, batch_size=16)
+
+        for chunk_idx, (body, vector, embed_text) in enumerate(zip(chunks, vectors, embed_texts)):
             if vector is None:
                 skipped += 1
                 continue
 
             unique_id = f"{article['code']}_st{article['number']}_chunk{chunk_idx}"
-            print(unique_id)
             collection.upsert(
                 ids=[unique_id],
                 embeddings=[vector],
@@ -114,6 +116,7 @@ def add_articles(articles, reset_collection: bool = False):
                     {
                         "number": str(article["number"]),
                         "code": article["code"],
+                        "short_code": short_code,
                         "chunk_index": chunk_idx,
                         "total_chunks": total,
                     }
@@ -122,13 +125,11 @@ def add_articles(articles, reset_collection: bool = False):
 
         if (i + 1) % 50 == 0:
             print(f"  Загружено: {i + 1}/{len(articles)} (пропущено чанков: {skipped})")
-        if (i + 1) % 10 == 0:
-            time.sleep(0.5)
 
     print(f"Готово! Пропущено чанков: {skipped}")
 
 
-def search(query, n_results=None):
+def search(query, n_results=None, filter_codes: list[str] | None = None):
     """возвращает chroma-results"""
     if n_results is None:
         n_results = config.VECTOR_TOP_K
@@ -141,12 +142,8 @@ def search(query, n_results=None):
             "distances": [[]],
             "ids": [[]],
         }
-    print("query_vector:", True)
-    print("collection:", collection.name)
-    results = collection.query(
-        query_embeddings=[query_vector],
-        n_results=n_results,
-    )
-    ids = results.get("ids") or [[]]
-    print("results ids:", ids[0][:5])
+    kwargs = {"query_embeddings": [query_vector], "n_results": n_results}
+    if filter_codes:
+        kwargs["where"] = {"short_code": {"$in": filter_codes}}
+    results = collection.query(**kwargs)
     return results

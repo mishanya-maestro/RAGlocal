@@ -76,6 +76,8 @@ for _stream in (sys.stdout, sys.stderr):
 
 import autoselect
 import config
+import document_analysis as doc_analysis
+import document_parser as doc_parser
 import eval_retrieval as metrics_mod
 from generator import generate_answer, generate_direct_answer
 
@@ -375,6 +377,17 @@ def index():
     )
 
 
+@app.get("/analyze")
+def analyze_page():
+    return render_template(
+        "analyze.html",
+        mode=config.MODE,
+        available_modes=["local", "api"],
+        setup_ready=bool(_SETUP_BOOT.get("ready")),
+        setup_tier=_SETUP_BOOT.get("tier") or "",
+    )
+
+
 @app.get("/api/setup/status")
 def api_setup_status():
     try:
@@ -638,6 +651,54 @@ def api_compare():
             "mode": selected_mode,
         }
     )
+
+
+@app.post("/api/analyze-document")
+def api_analyze_document():
+    """Загрузка PDF/DOCX/TXT и проверка документа на соответствие законам РБ."""
+    if "document" not in request.files:
+        return jsonify({"error": "Нет файла document"}), 400
+
+    f = request.files["document"]
+    if not f or not f.filename:
+        return jsonify({"error": "Пустой файл"}), 400
+
+    filename = f.filename or ""
+    lower = filename.lower()
+    if not (lower.endswith(".pdf") or lower.endswith(".docx") or lower.endswith(".txt")):
+        return jsonify({"error": "Поддерживаются PDF, DOCX и TXT"}), 400
+
+    file_bytes = f.read()
+    if not file_bytes:
+        return jsonify({"error": "Пустой документ"}), 400
+
+    if len(file_bytes) > 10 * 1024 * 1024:
+        return jsonify({"error": "Файл больше 10 МБ"}), 400
+
+    try:
+        parsed = doc_parser.parse_uploaded_document(filename, file_bytes)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Не удалось извлечь текст: {e}"}), 500
+
+    if not parsed.full_text.strip():
+        return jsonify({"error": "Не удалось извлечь текст из документа"}), 400
+
+    try:
+        result = doc_analysis.analyze_document(parsed)
+        return jsonify(
+            {
+                "ok": True,
+                "filename": filename,
+                "doc_type": parsed.doc_type,
+                "doc_type_label": parsed.doc_type_label,
+                "doc_type_confidence": parsed.doc_type_confidence,
+                "result": result,
+            }
+        )
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

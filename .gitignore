@@ -4,4 +4,11 @@
 __pycache__/
 /cli.py/
 /chroma_db_new/
+/chroma_db/
 /.env
+
+# Temporary test artifacts
+last_error.html
+last_response.json
+last_response2.json
+test_contract.txt

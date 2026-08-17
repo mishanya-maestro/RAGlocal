@@ -132,6 +132,7 @@ def retrieve_context(
     pool=None,
     use_rerank=None,
     return_debug: bool = False,
+    filter_codes: list[str] | None = None,
 ):
     """Полный pipeline. Возвращает (context_rows, metadata) или (..., RetrievalDebug)."""
     if top_k is None:
@@ -146,12 +147,12 @@ def retrieve_context(
     # Переформулировка только для поиска; исходный query остаётся для LLM выше по стеку.
     search_query = formalize_query(query) or query
 
-    results = database.search(search_query, config.VECTOR_TOP_K) or {}
+    results = database.search(search_query, config.VECTOR_TOP_K, filter_codes=filter_codes) or {}
     docs = (results.get("documents") or [[]])[0]
     metas = (results.get("metadatas") or [[]])[0]
     dists = (results.get("distances") or [[]])[0]
 
-    fts_rows = fts_index.fts_search(search_query, config.FTS_TOP_K)
+    fts_rows = fts_index.fts_search(search_query, config.FTS_TOP_K, filter_codes=filter_codes)
 
     scores, _ = _rrf_scores(
         metas,
