@@ -6,7 +6,8 @@ import sqlite3
 import requests
 
 import config
-from retrieval import retrieve_context
+import corpus_manager
+from retrieval import retrieve_context, retrieve_context_from_corpus
 
 
 # Распознаём ссылки вида «статья 9», «ст. 11_1», «статьи 12», «статьями 5 и 6».
@@ -198,13 +199,14 @@ def _call_llm(
     user_prompt: str,
     mode_override: str | None = None,
     model_override: str | None = None,
+    max_tokens: int | None = None,
 ) -> str:
     url, headers, model, mode_name = _resolve_llm_transport(mode_override, model_override)
     system_prompt, user_prompt = _prepare_prompt_for_model(
         system_prompt, user_prompt, mode_name, model
     )
     temperature = getattr(config, "GENERATOR_TEMP", 0.1)
-    max_tokens = getattr(config, "GENERATOR_MAX_TOKENS", 900)
+    max_tokens = max_tokens or getattr(config, "GENERATOR_MAX_TOKENS", 900)
     if _is_local_qwen(mode_name, model):
         return _call_ollama_native(
             model,
@@ -255,39 +257,63 @@ def generate_answer(
 ):
     """Гибрид retrieval → reference expansion → LLM с явными источниками."""
 
-    context_rows, metadata = retrieve_context(query)
-    context_rows, metadata = _expand_references(context_rows, metadata)
+    active_corpus = corpus_manager.get_active_corpus()
+    if active_corpus:
+        context_rows, metadata = retrieve_context_from_corpus(
+            query, active_corpus["collection_name"]
+        )
+        real_rows = [row for row in context_rows if row]
+        real_meta = metadata
+        sources = [f"{meta['filename']}" for meta in real_meta]
+        source_meta = [
+            {
+                "label": meta["filename"],
+                "doc_id": meta["doc_id"],
+                "corpus_id": meta["corpus_id"],
+            }
+            for meta in real_meta
+        ]
+        context = "\n\n".join(real_rows)
+    else:
+        context_rows, metadata = retrieve_context(query)
+        context_rows, metadata = _expand_references(context_rows, metadata)
 
-    real_rows = []
-    real_meta = []
-    for row, meta in zip(context_rows, metadata):
-        if row and row[0]:
-            real_rows.append(row)
-            real_meta.append(meta)
+        real_rows = []
+        real_meta = []
+        for row, meta in zip(context_rows, metadata):
+            if row and row[0]:
+                real_rows.append(row)
+                real_meta.append(meta)
 
-    sources = [f"{meta['code']}, ст. {meta['number']}" for meta in real_meta]
-    source_meta = [
-        {
-            "label": f"{meta['code']}, ст. {meta['number']}",
-            "code": str(meta["code"]),
-            "number": str(meta["number"]),
-        }
-        for meta in real_meta
-    ]
-    context = _build_context(real_rows, real_meta)
+        sources = [f"{meta['code']}, ст. {meta['number']}" for meta in real_meta]
+        source_meta = [
+            {
+                "label": f"{meta['code']}, ст. {meta['number']}",
+                "code": str(meta["code"]),
+                "number": str(meta["number"]),
+            }
+            for meta in real_meta
+        ]
+        context = _build_context(real_rows, real_meta)
 
     if not context.strip():
-        empty_answer = (
-            "В индексе нет статей, релевантных запросу. "
-            "Уточните вопрос или переиндексируйте корпус."
-        )
+        if active_corpus:
+            empty_answer = (
+                f"В корпусе «{active_corpus['name']}» не найдены фрагменты, релевантные запросу. "
+                "Попробуйте переформулировать вопрос или загрузить в корпус другие документы."
+            )
+        else:
+            empty_answer = (
+                "В индексе нет статей, релевантных запросу. "
+                "Уточните вопрос или переиндексируйте корпус."
+            )
         if include_source_meta:
             return empty_answer, sources, source_meta
         return empty_answer, sources
 
     user_prompt = f"""Ты — юридический консультант по законодательству Республики Беларусь.
-Используй ТОЛЬКО приведённые ниже статьи. Каждый важный тезис подкрепляй короткой цитатой в кавычках и ссылкой в формате (Кодекс, ст. N).
-Если ответа в приложенных статьях нет, попытайся ответить теми статьями которые у тебя есть. Не говори что у тебя нет ответа, отвечай на вопрос тем, что есть
+Используй ТОЛЬКО приведённые ниже источники. Каждый важный тезис подкрепляй короткой цитатой в кавычках и ссылкой на источник (документ или статью).
+Если ответа в приложенных источниках нет, честно напиши, что в предоставленных документах нет информации по этому вопросу. Не выдумывай нормы и факты.
 Пиши на русском языке. Не раскрывай внутренние рассуждения и не повторяй инструкции.
 
 Контекст:
@@ -295,7 +321,7 @@ def generate_answer(
 
 Вопрос гражданина: {query}
 
-Ответ (со ссылками на статьи):"""
+Ответ (со ссылками на источники):"""
 
     answer = _call_llm(
         system_prompt=(

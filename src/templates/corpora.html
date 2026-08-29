@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Мои корпуса — Юридический ассистент РБ</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+  <div id="setupOverlay" class="setup-overlay" hidden>
+    <section class="setup-card" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
+      <div id="setupHero" class="setup-hero" data-tone="medium">
+        <div class="setup-hero-glow" aria-hidden="true"></div>
+        <div class="setup-hero-top">
+          <div>
+            <p class="setup-kicker">Анализ вашего ПК</p>
+            <h2 id="setupTitle">Подбор моделей</h2>
+            <p id="setupTierSubtitle" class="setup-lead"></p>
+          </div>
+          <div id="setupTierBadge" class="setup-tier-badge">MEDIUM</div>
+        </div>
+        <ul id="setupHardware" class="setup-hw-grid"></ul>
+      </div>
+
+      <div class="setup-models-head">
+        <h3>Модели для установки</h3>
+        <p>LLM и Speech-to-text можно сменить. Embedding и Cross encoder фиксированы.</p>
+      </div>
+      <div id="setupSlots" class="setup-slots"></div>
+
+      <div id="setupStatus" class="setup-status"></div>
+      <div class="setup-actions">
+        <button id="setupInstallBtn" class="setup-btn primary" type="button">
+          Установить выбранные
+        </button>
+        <button id="setupSkipBtn" class="setup-btn" type="button">Пропустить</button>
+      </div>
+    </section>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-text">Юридический ассистент РБ</span>
+    </div>
+    <div class="topbar-right">
+      <a href="/" class="icon-btn" aria-label="Вопрос" title="Вопрос">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+      </a>
+      <div class="avatar" title="Гость">Г</div>
+    </div>
+  </header>
+
+  <main id="appMain" class="app-main corpora-main">
+    <nav class="mode-switcher" aria-label="Режимы работы">
+      <a href="/" class="mode-switcher-tab">Вопрос</a>
+      <a href="/analyze" class="mode-switcher-tab">Анализ документа</a>
+      <span class="mode-switcher-tab active" aria-current="page">Мои корпуса</span>
+    </nav>
+
+    <section class="welcome corpora-welcome">
+      <h1>Мои корпуса документов</h1>
+      <p class="welcome-sub">Создавайте собственные базы статей и документов. Задавайте вопросы по ним в режиме «Вопрос».</p>
+    </section>
+
+    <section class="corpora-create">
+      <form id="createCorpusForm" class="corpora-form">
+        <div class="corpora-form-row">
+          <input type="text" id="corpusName" class="corpora-input" placeholder="Название корпуса" required maxlength="60" />
+          <input type="text" id="corpusDescription" class="corpora-input" placeholder="Описание (необязательно)" maxlength="200" />
+          <button type="submit" class="corpora-btn primary">Создать корпус</button>
+        </div>
+      </form>
+    </section>
+
+    <div id="corporaStatus" class="status-line"></div>
+
+    <section id="corporaList" class="corpora-list">
+      <div class="corpora-empty" id="corporaEmpty">Корпусов пока нет. Создайте первый выше.</div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script src="{{ url_for('static', filename='corpora.js') }}"></script>
+</body>
+</html>

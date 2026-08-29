@@ -169,13 +169,21 @@ function copyButton(text) {
   `;
 }
 
+function isUsingCorpus(data) {
+  if (!data) return false;
+  if (data.active_corpus_id) return true;
+  const corpusValue = ($("corpusSelect")?.dataset.value || "").trim();
+  return corpusValue !== "";
+}
+
 function renderNormalResponse(data) {
   const answerText = data.answer || "";
   const answerHtml = renderMarkdown(answerText);
+  const sourcesHtml = isUsingCorpus(data) ? "" : renderSourcesHtml(data.source_meta || data.sources || []);
   return `
     <div class="assistant-answer">
       <div class="answer-markdown">${answerHtml}</div>
-      ${renderSourcesHtml(data.source_meta || data.sources || [])}
+      ${sourcesHtml}
       ${copyButton(answerText)}
     </div>
   `;
@@ -197,7 +205,7 @@ function renderCompareResponse(data) {
   const ragText = data.rag_error
     ? `Ошибка RAG: ${data.rag_error}`
     : data.rag_answer || "";
-  const sourcesHtml = renderSourcesHtml(data.source_meta || data.sources || []);
+  const sourcesHtml = isUsingCorpus(data) ? "" : renderSourcesHtml(data.source_meta || data.sources || []);
 
   return `
     <div class="assistant-answer">
@@ -490,6 +498,44 @@ $("newChatBtn").addEventListener("click", () => {
 });
 
 document.querySelectorAll(".mode-dd").forEach(initDropdown);
+
+async function loadCorpusDropdown() {
+  const root = $("corpusSelect");
+  if (!root) return;
+  try {
+    const data = await fetch("/api/corpora").then((r) => r.json());
+    const active = data.active_corpus_id || "";
+    const list = [
+      { id: "", label: "Системная база законов РБ", selected: !active },
+    ];
+    for (const c of data.corpora || []) {
+      list.push({ id: c.id, label: c.name, selected: c.id === active });
+    }
+    setDropdownOptions(root, list, active);
+    root.dataset.value = active;
+  } catch (e) {
+    console.warn("Failed to load corpora dropdown:", e);
+  }
+}
+
+loadCorpusDropdown();
+
+$("corpusSelect")?.addEventListener("mode-dd:change", async (event) => {
+  const corpusId = event.detail?.value || "";
+  const status = $("chatStatus");
+  try {
+    if (corpusId) {
+      await postJSON(`/api/corpora/${corpusId}/set-active`, {});
+      if (status) status.textContent = "Активирован пользовательский корпус";
+    } else {
+      await postJSON("/api/corpora/clear-active", {});
+      if (status) status.textContent = "Используется системная база законов РБ";
+    }
+  } catch (e) {
+    if (status) status.textContent = "Ошибка выбора корпуса: " + (e?.message || e);
+    loadCorpusDropdown();
+  }
+});
 
 function syncComposerModelDropdowns(data) {
   if (!data) return;

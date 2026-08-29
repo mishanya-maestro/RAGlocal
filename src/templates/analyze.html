@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Анализ документа — Юридический ассистент РБ</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+  <div id="setupOverlay" class="setup-overlay" hidden>
+    <section class="setup-card" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
+      <div id="setupHero" class="setup-hero" data-tone="medium">
+        <div class="setup-hero-glow" aria-hidden="true"></div>
+        <div class="setup-hero-top">
+          <div>
+            <p class="setup-kicker">Анализ вашего ПК</p>
+            <h2 id="setupTitle">Подбор моделей</h2>
+            <p id="setupTierSubtitle" class="setup-lead"></p>
+          </div>
+          <div id="setupTierBadge" class="setup-tier-badge">MEDIUM</div>
+        </div>
+        <ul id="setupHardware" class="setup-hw-grid"></ul>
+      </div>
+
+      <div class="setup-models-head">
+        <h3>Модели для установки</h3>
+        <p>LLM и Speech-to-text можно сменить. Embedding и Cross encoder фиксированы.</p>
+      </div>
+      <div id="setupSlots" class="setup-slots"></div>
+
+      <div id="setupStatus" class="setup-status"></div>
+      <div class="setup-actions">
+        <button id="setupInstallBtn" class="setup-btn primary" type="button">
+          Установить выбранные
+        </button>
+        <button id="setupSkipBtn" class="setup-btn" type="button">Пропустить</button>
+      </div>
+    </section>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-text">Юридический ассистент РБ</span>
+    </div>
+    <div class="topbar-right">
+      <a href="/" class="icon-btn" aria-label="Вопрос" title="Вопрос">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+      </a>
+      <div class="avatar" title="Гость">Г</div>
+    </div>
+  </header>
+
+  <main id="appMain" class="app-main analyze-main">
+    <nav class="mode-switcher" aria-label="Режимы работы">
+      <a href="/" class="mode-switcher-tab">Вопрос</a>
+      <span class="mode-switcher-tab active" aria-current="page">Анализ документа</span>
+      <a href="/corpora" class="mode-switcher-tab">Мои корпуса</a>
+    </nav>
+
+    <section class="welcome analyze-welcome">
+      <h1>Проверка документа на законодательство РБ</h1>
+      <p class="welcome-sub">Загрузите договор, исковое заявление или приказ — система найдёт несоответствия и предложит правки со ссылками на нормы.</p>
+    </section>
+
+    <section class="upload-box" id="uploadBox">
+      <input type="file" id="docInput" class="doc-input" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp,.bmp,.gif,.tiff,.tif" hidden />
+      <label for="docInput" class="upload-drop" id="uploadDrop">
+        <svg class="upload-icon" viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+        <p class="upload-title">Перетащите файл или нажмите для выбора</p>
+            <p class="upload-hint">PDF, DOCX, TXT или фото (PNG, JPG, WEBP), до 10 МБ</p>
+          </label>
+          <div class="upload-file-row" id="uploadFileRow" hidden>
+            <span class="upload-file-name" id="uploadFileName"></span>
+            <button type="button" class="upload-remove" id="uploadRemove" aria-label="Удалить файл">×</button>
+          </div>
+      <button type="button" class="send-circle upload-btn" id="analyzeBtn" disabled>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="19" x2="12" y2="5"></line>
+          <polyline points="5 12 12 5 19 12"></polyline>
+        </svg>
+      </button>
+    </section>
+
+    <div id="analyzeStatus" class="status-line"></div>
+
+    <section id="analyzeResults" class="analyze-results" hidden>
+      <div id="analyzeDocInfo" class="analyze-doc-info"></div>
+      <div class="analyze-summary" id="analyzeSummary"></div>
+
+      <div class="template-card" id="templateCard">
+        <div class="template-card-header">
+          <div>
+            <h3 class="template-card-title">Образец правильного документа</h3>
+            <p class="template-card-subtitle" id="templateSubtitle"></p>
+          </div>
+          <button type="button" class="template-download-btn" id="templateDownloadBtn">Скачать образец</button>
+        </div>
+        <div class="template-preview" id="templatePreview"></div>
+      </div>
+
+      <div class="structure-report" id="structureReport">
+        <h3 class="structure-report-title">Проверка по структуре</h3>
+        <div id="structureGrid" class="structure-grid"></div>
+      </div>
+
+      <div class="analyze-toolbar" id="analyzeToolbar" hidden>
+        <div class="analyze-filters">
+          <button type="button" class="filter-btn active" data-filter="all">Все</button>
+          <button type="button" class="filter-btn" data-filter="critical">Критично</button>
+          <button type="button" class="filter-btn" data-filter="important">Важно</button>
+          <button type="button" class="filter-btn" data-filter="recommendation">Рекомендации</button>
+        </div>
+        <button type="button" class="export-btn" id="exportBtn">Экспорт отчёта</button>
+      </div>
+      <div class="analyze-issues" id="analyzeIssues"></div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script src="{{ url_for('static', filename='analyze.js') }}"></script>
+</body>
+</html>

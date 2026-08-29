@@ -76,6 +76,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 import autoselect
 import config
+import corpus_manager
 import document_analysis as doc_analysis
 import document_parser as doc_parser
 import eval_retrieval as metrics_mod
@@ -388,6 +389,17 @@ def analyze_page():
     )
 
 
+@app.get("/corpora")
+def corpora_page():
+    return render_template(
+        "corpora.html",
+        mode=config.MODE,
+        available_modes=["local", "api"],
+        setup_ready=bool(_SETUP_BOOT.get("ready")),
+        setup_tier=_SETUP_BOOT.get("tier") or "",
+    )
+
+
 @app.get("/api/setup/status")
 def api_setup_status():
     try:
@@ -495,12 +507,15 @@ def api_ask():
         )
         if not source_meta:
             source_meta = _parse_legacy_sources(sources)
+        active_corpus = corpus_manager.get_active_corpus()
         return jsonify(
             {
                 "answer": answer,
                 "sources": sources,
                 "source_meta": source_meta,
                 "mode": selected_mode,
+                "active_corpus_id": active_corpus.get("id") if active_corpus else None,
+                "active_corpus_name": active_corpus.get("name") if active_corpus else None,
             }
         )
     except Exception as e:
@@ -665,8 +680,9 @@ def api_analyze_document():
 
     filename = f.filename or ""
     lower = filename.lower()
-    if not (lower.endswith(".pdf") or lower.endswith(".docx") or lower.endswith(".txt")):
-        return jsonify({"error": "Поддерживаются PDF, DOCX и TXT"}), 400
+    allowed_ext = (".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".tif")
+    if not lower.endswith(allowed_ext):
+        return jsonify({"error": "Поддерживаются PDF, DOCX, TXT и фото (PNG, JPG, WEBP и др.)"}), 400
 
     file_bytes = f.read()
     if not file_bytes:
@@ -696,6 +712,139 @@ def api_analyze_document():
                 "result": result,
             }
         )
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/corpora")
+def api_list_corpora():
+    """Возвращает список корпусов и активный корпус."""
+    try:
+        corpora = corpus_manager.list_corpora()
+        active = corpus_manager.get_active_corpus()
+        return jsonify({"corpora": corpora, "active_corpus_id": active.get("id") if active else None})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/corpora")
+def api_create_corpus():
+    """Создаёт новый корпус."""
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    description = (data.get("description") or "").strip()
+    if not name:
+        return jsonify({"error": "Название корпуса обязательно"}), 400
+    try:
+        corpus = corpus_manager.create_corpus(name, description)
+        return jsonify(corpus), 201
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.delete("/api/corpora/<corpus_id>")
+def api_delete_corpus(corpus_id: str):
+    """Удаляет корпус и его коллекцию."""
+    try:
+        if not corpus_manager.delete_corpus(corpus_id):
+            return jsonify({"error": "Корпус не найден"}), 404
+        return jsonify({"ok": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/corpora/<corpus_id>/documents")
+def api_list_documents(corpus_id: str):
+    """Возвращает список документов корпуса."""
+    corpus = corpus_manager.get_corpus(corpus_id)
+    if not corpus:
+        return jsonify({"error": "Корпус не найден"}), 404
+    return jsonify({"documents": corpus.get("documents", [])})
+
+
+@app.post("/api/corpora/<corpus_id>/documents")
+def api_upload_document(corpus_id: str):
+    """Загружает документы в корпус и индексирует их."""
+    if "documents" not in request.files:
+        return jsonify({"error": "Нет файлов documents"}), 400
+
+    uploaded = request.files.getlist("documents")
+    if not uploaded:
+        return jsonify({"error": "Пустой список файлов"}), 400
+
+    allowed_ext = (".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".tif")
+    added = []
+    errors = []
+    for f in uploaded:
+        if not f or not f.filename:
+            continue
+        filename = f.filename
+        lower = filename.lower()
+        if not lower.endswith(allowed_ext):
+            errors.append(f"{filename}: неподдерживаемый формат")
+            continue
+        file_bytes = f.read()
+        if not file_bytes:
+            errors.append(f"{filename}: пустой файл")
+            continue
+        if len(file_bytes) > 10 * 1024 * 1024:
+            errors.append(f"{filename}: файл больше 10 МБ")
+            continue
+        try:
+            doc = corpus_manager.store_document(corpus_id, filename, file_bytes)
+            added.append({"doc_id": doc["doc_id"], "filename": doc["filename"]})
+        except Exception as e:
+            traceback.print_exc()
+            errors.append(f"{filename}: {e}")
+
+    return jsonify({"ok": True, "added": added, "errors": errors})
+
+
+@app.delete("/api/corpora/<corpus_id>/documents/<doc_id>")
+def api_delete_document(corpus_id: str, doc_id: str):
+    """Удаляет документ из корпуса."""
+    try:
+        if not corpus_manager.delete_document(corpus_id, doc_id):
+            return jsonify({"error": "Документ или корпус не найден"}), 404
+        return jsonify({"ok": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/corpora/<corpus_id>/set-active")
+def api_set_active_corpus(corpus_id: str):
+    """Устанавливает активный корпус для режима вопроса."""
+    try:
+        if not corpus_manager.set_active_corpus(corpus_id):
+            return jsonify({"error": "Корпус не найден"}), 404
+        return jsonify({"ok": True, "active_corpus_id": corpus_id})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/corpora/clear-active")
+def api_clear_active_corpus():
+    """Сбрасывает активный корпус (возвращается системная база законов)."""
+    try:
+        corpus_manager.set_active_corpus(None)
+        return jsonify({"ok": True, "active_corpus_id": None})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/corpora/active")
+def api_get_active_corpus():
+    """Возвращает активный корпус."""
+    try:
+        active = corpus_manager.get_active_corpus()
+        return jsonify({"active_corpus_id": active.get("id") if active else None, "corpus": active})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

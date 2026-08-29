@@ -239,3 +239,44 @@ def retrieve_context(
         return context_rows, final_meta
     finally:
         con.close()
+
+
+def retrieve_context_from_corpus(query, collection_name: str, top_k: int | None = None):
+    """Простой векторный поиск по пользовательскому корпусу.
+
+    Возвращает (context_rows, metadata), где context_rows — список строк (чанков),
+    metadata — список словарей с doc_id, filename, corpus_id.
+    """
+    if top_k is None:
+        top_k = max(config.RETRIEVER_TOP_K, 10)
+
+    search_query = formalize_query(query) or query
+    results = database.search_collection(search_query, collection_name, n_results=config.VECTOR_TOP_K) or {}
+
+    docs = (results.get("documents") or [[]])[0]
+    metas = (results.get("metadatas") or [[]])[0]
+    dists = (results.get("distances") or [[]])[0]
+
+    # Берём top-K чанков напрямую (несколько чанков из одного документа — нормально).
+    scored = []
+    for doc, meta, dist in zip(docs, metas, dists):
+        doc_id = str(meta.get("doc_id", ""))
+        if not doc_id:
+            continue
+        scored.append((doc, meta, dist))
+
+    sorted_chunks = sorted(scored, key=lambda x: x[2])[:top_k]
+
+    context_rows = []
+    metadata = []
+    for doc, meta, _ in sorted_chunks:
+        context_rows.append(doc)
+        metadata.append(
+            {
+                "doc_id": str(meta.get("doc_id", "")),
+                "filename": str(meta.get("filename", "")),
+                "corpus_id": str(meta.get("corpus_id", "")),
+            }
+        )
+
+    return context_rows, metadata

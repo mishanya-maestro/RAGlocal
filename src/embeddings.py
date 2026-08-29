@@ -5,6 +5,9 @@ import requests
 import config
 
 
+_ollama_session = requests.Session()
+
+
 def get_embedding(text, retries=3, delay=2):
     """превращает текст в вектор"""
 
@@ -25,7 +28,7 @@ def get_embedding(text, retries=3, delay=2):
 
     for attempt in range(retries):
         try:
-            response = requests.post(
+            response = _ollama_session.post(
                 url=url, headers=headers, json=payload, timeout=30
             )
 
@@ -87,7 +90,7 @@ def get_embeddings(texts: list[str], batch_size: int = 8, retries: int = 3, dela
 
         for attempt in range(retries):
             try:
-                response = requests.post(
+                response = _ollama_session.post(
                     url=url,
                     headers=headers,
                     json={"model": config.EMBEDDING_MODEL, "input": batch},

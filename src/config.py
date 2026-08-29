@@ -32,6 +32,10 @@ FULLTEXT_DB = Path(os.environ.get("FULLTEXT_DB", str(PROJECT_ROOT / "fulltext.db
 CHROMA_PERSIST_DIR = Path(
     os.environ.get("CHROMA_PERSIST_DIR", str(PROJECT_ROOT / "chroma_db"))
 )
+CORPORA_FILE = Path(os.environ.get("CORPORA_FILE", str(PROJECT_ROOT / "corpora.json")))
+CORPORA_STORAGE_DIR = Path(
+    os.environ.get("CORPORA_STORAGE_DIR", str(PROJECT_ROOT / "corpora_storage"))
+)
 ASSEMBLYAI_API_KEY = os.environ.get("ASSEMBLYAI_API_KEY", "")
 # Режим: "local" или "api"
 # Для обратной совместимости поддерживаются старые значения из окружения:

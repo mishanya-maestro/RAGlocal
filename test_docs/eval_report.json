@@ -1,0 +1,409 @@
+{
+  "overall": {
+    "total_expected": 27,
+    "total_actual": 36,
+    "true_positives": 19,
+    "false_positives": 26,
+    "false_negatives": 8,
+    "precision": 0.42,
+    "recall": 0.7,
+    "f1": 0.53,
+    "type_accuracy": 1.0,
+    "structural_accuracy": 0.71,
+    "avg_time_sec": 7.0
+  },
+  "cases": [
+    {
+      "file": "01_contract_missing_price.txt",
+      "expected_type": "contract",
+      "detected_type": "contract",
+      "type_correct": true,
+      "expected_count": 1,
+      "actual_count": 5,
+      "tp": 1,
+      "fp": 5,
+      "fn": 0,
+      "precision": 0.17,
+      "recall": 1.0,
+      "f1": 0.29,
+      "structural_rate": 1.0,
+      "found_required": 5,
+      "total_required": 5,
+      "time": 10.8,
+      "summary": {
+        "critical": 0,
+        "important": 6,
+        "recommendation": 0,
+        "total": 6
+      },
+      "matched_checks": [
+        "c_price"
+      ],
+      "expected_checks": [
+        "c_price"
+      ],
+      "missed_checks": [],
+      "extra_checks": [
+        "c_liability",
+        "c_subject",
+        "c_term",
+        "cl_parties",
+        "lc_salary"
+      ]
+    },
+    {
+      "file": "02_contract_multiple_issues.txt",
+      "expected_type": "contract",
+      "detected_type": "contract",
+      "type_correct": true,
+      "expected_count": 5,
+      "actual_count": 3,
+      "tp": 2,
+      "fp": 2,
+      "fn": 3,
+      "precision": 0.5,
+      "recall": 0.4,
+      "f1": 0.44,
+      "structural_rate": 0.6,
+      "found_required": 3,
+      "total_required": 5,
+      "time": 3.0,
+      "summary": {
+        "critical": 2,
+        "important": 1,
+        "recommendation": 0,
+        "total": 3
+      },
+      "matched_checks": [
+        "c_parties",
+        "c_price"
+      ],
+      "expected_checks": [
+        "c_form",
+        "c_liability",
+        "c_parties",
+        "c_price",
+        "c_term"
+      ],
+      "missed_checks": [
+        "c_form",
+        "c_liability",
+        "c_term"
+      ],
+      "extra_checks": [
+        "c_subject",
+        "cl_parties"
+      ]
+    },
+    {
+      "file": "03_labor_contract_missing_leave.txt",
+      "expected_type": "labor_contract",
+      "detected_type": "labor_contract",
+      "type_correct": true,
+      "expected_count": 1,
+      "actual_count": 3,
+      "tp": 0,
+      "fp": 3,
+      "fn": 1,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "structural_rate": 1.0,
+      "found_required": 6,
+      "total_required": 6,
+      "time": 11.9,
+      "summary": {
+        "critical": 0,
+        "important": 9,
+        "recommendation": 0,
+        "total": 9
+      },
+      "matched_checks": [],
+      "expected_checks": [
+        "lc_leave"
+      ],
+      "missed_checks": [
+        "lc_leave"
+      ],
+      "extra_checks": [
+        "cl_parties",
+        "cl_subject",
+        "lc_probation"
+      ]
+    },
+    {
+      "file": "04_labor_contract_multiple_issues.txt",
+      "expected_type": "labor_contract",
+      "detected_type": "labor_contract",
+      "type_correct": true,
+      "expected_count": 4,
+      "actual_count": 5,
+      "tp": 4,
+      "fp": 3,
+      "fn": 0,
+      "precision": 0.57,
+      "recall": 1.0,
+      "f1": 0.73,
+      "structural_rate": 0.83,
+      "found_required": 5,
+      "total_required": 6,
+      "time": 10.3,
+      "summary": {
+        "critical": 1,
+        "important": 7,
+        "recommendation": 0,
+        "total": 8
+      },
+      "matched_checks": [
+        "lc_parties",
+        "lc_position",
+        "lc_probation",
+        "lc_salary"
+      ],
+      "expected_checks": [
+        "lc_parties",
+        "lc_position",
+        "lc_probation",
+        "lc_salary"
+      ],
+      "missed_checks": [],
+      "extra_checks": [
+        "c_price",
+        "cl_parties",
+        "cl_subject"
+      ]
+    },
+    {
+      "file": "05_claim_good.txt",
+      "expected_type": "claim",
+      "detected_type": "claim",
+      "type_correct": true,
+      "expected_count": 1,
+      "actual_count": 3,
+      "tp": 1,
+      "fp": 3,
+      "fn": 0,
+      "precision": 0.25,
+      "recall": 1.0,
+      "f1": 0.4,
+      "structural_rate": 1.0,
+      "found_required": 8,
+      "total_required": 8,
+      "time": 6.8,
+      "summary": {
+        "critical": 0,
+        "important": 4,
+        "recommendation": 0,
+        "total": 4
+      },
+      "matched_checks": [
+        "cl_fee"
+      ],
+      "expected_checks": [
+        "cl_fee"
+      ],
+      "missed_checks": [],
+      "extra_checks": [
+        "c_price",
+        "cl_subject",
+        "lc_parties"
+      ]
+    },
+    {
+      "file": "06_claim_multiple_issues.txt",
+      "expected_type": "claim",
+      "detected_type": "claim",
+      "type_correct": true,
+      "expected_count": 6,
+      "actual_count": 5,
+      "tp": 5,
+      "fp": 1,
+      "fn": 1,
+      "precision": 0.83,
+      "recall": 0.83,
+      "f1": 0.83,
+      "structural_rate": 0.62,
+      "found_required": 5,
+      "total_required": 8,
+      "time": 8.5,
+      "summary": {
+        "critical": 2,
+        "important": 7,
+        "recommendation": 0,
+        "total": 9
+      },
+      "matched_checks": [
+        "cl_attachments",
+        "cl_court",
+        "cl_parties",
+        "cl_signature",
+        "cl_subject"
+      ],
+      "expected_checks": [
+        "cl_attachments",
+        "cl_court",
+        "cl_fee",
+        "cl_parties",
+        "cl_signature",
+        "cl_subject"
+      ],
+      "missed_checks": [
+        "cl_fee"
+      ],
+      "extra_checks": [
+        "c_form"
+      ]
+    },
+    {
+      "file": "07_order_good.txt",
+      "expected_type": "order",
+      "detected_type": "order",
+      "type_correct": true,
+      "expected_count": 1,
+      "actual_count": 1,
+      "tp": 0,
+      "fp": 1,
+      "fn": 1,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "structural_rate": 0.86,
+      "found_required": 6,
+      "total_required": 7,
+      "time": 3.5,
+      "summary": {
+        "critical": 1,
+        "important": 0,
+        "recommendation": 0,
+        "total": 1
+      },
+      "matched_checks": [],
+      "expected_checks": [
+        "o_acknowledgement"
+      ],
+      "missed_checks": [
+        "o_acknowledgement"
+      ],
+      "extra_checks": [
+        "o_date"
+      ]
+    },
+    {
+      "file": "08_order_multiple_issues.txt",
+      "expected_type": "order",
+      "detected_type": "order",
+      "type_correct": true,
+      "expected_count": 4,
+      "actual_count": 5,
+      "tp": 4,
+      "fp": 2,
+      "fn": 0,
+      "precision": 0.67,
+      "recall": 1.0,
+      "f1": 0.8,
+      "structural_rate": 0.29,
+      "found_required": 2,
+      "total_required": 7,
+      "time": 4.7,
+      "summary": {
+        "critical": 5,
+        "important": 2,
+        "recommendation": 0,
+        "total": 7
+      },
+      "matched_checks": [
+        "o_acknowledgement",
+        "o_basis",
+        "o_date",
+        "o_issuer"
+      ],
+      "expected_checks": [
+        "o_acknowledgement",
+        "o_basis",
+        "o_date",
+        "o_issuer"
+      ],
+      "missed_checks": [],
+      "extra_checks": [
+        "lc_parties",
+        "lc_salary"
+      ]
+    },
+    {
+      "file": "09_consumer_contract_issues.txt",
+      "expected_type": "contract",
+      "detected_type": "contract",
+      "type_correct": true,
+      "expected_count": 2,
+      "actual_count": 3,
+      "tp": 2,
+      "fp": 3,
+      "fn": 0,
+      "precision": 0.4,
+      "recall": 1.0,
+      "f1": 0.57,
+      "structural_rate": 0.6,
+      "found_required": 3,
+      "total_required": 5,
+      "time": 7.7,
+      "summary": {
+        "critical": 4,
+        "important": 2,
+        "recommendation": 0,
+        "total": 6
+      },
+      "matched_checks": [
+        "c_consumer",
+        "c_form"
+      ],
+      "expected_checks": [
+        "c_consumer",
+        "c_form"
+      ],
+      "missed_checks": [],
+      "extra_checks": [
+        "c_price",
+        "c_subject",
+        "cl_parties"
+      ]
+    },
+    {
+      "file": "10_rent_contract_issues.txt",
+      "expected_type": "contract",
+      "detected_type": "contract",
+      "type_correct": true,
+      "expected_count": 2,
+      "actual_count": 3,
+      "tp": 0,
+      "fp": 3,
+      "fn": 2,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "structural_rate": 0.2,
+      "found_required": 1,
+      "total_required": 5,
+      "time": 2.3,
+      "summary": {
+        "critical": 3,
+        "important": 1,
+        "recommendation": 0,
+        "total": 4
+      },
+      "matched_checks": [],
+      "expected_checks": [
+        "c_form",
+        "c_term"
+      ],
+      "missed_checks": [
+        "c_form",
+        "c_term"
+      ],
+      "extra_checks": [
+        "c_price",
+        "c_subject",
+        "cl_parties"
+      ]
+    }
+  ]
+}

@@ -6,9 +6,23 @@ __pycache__/
 /chroma_db_new/
 /chroma_db/
 /.env
+/corpora.json
+/corpora_storage/
 
 # Temporary test artifacts
 last_error.html
 last_response.json
 last_response2.json
 test_contract.txt
+last_test_result.json
+last_api_response.json
+last_test_issues.txt
+browser_test.*
+test_api.py
+debug_keywords*.py
+test_all_docs.py
+create_test_docs.py
+test_pdf_docx.py
+test_image_api.py
+last_image_analysis.json
+test_docs/test_image.png
