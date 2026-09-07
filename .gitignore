@@ -4,7 +4,6 @@
 __pycache__/
 /cli.py/
 /chroma_db_new/
-/chroma_db/
 /.env
 /corpora.json
 /corpora_storage/

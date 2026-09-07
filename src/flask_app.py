@@ -371,7 +371,7 @@ def index():
         "index.html",
         mode=config.MODE,
         model=config.LLM_MODEL,
-        available_modes=["local", "api"],
+        available_modes=["local"],
         voice_stt_ready=_voice_stt_ready(),
         setup_ready=bool(_SETUP_BOOT.get("ready")),
         setup_tier=_SETUP_BOOT.get("tier") or "",
