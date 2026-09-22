@@ -59,14 +59,17 @@ OPENROUTER_LLM_MODEL = os.environ.get("OPENROUTER_LLM_MODEL", "openai/gpt-oss-12
 
 # --- Retrieval (фиксированы: одна векторная БД / один корпус) ---
 RETRIEVER_TOP_K = 7
-RERANKER_TOP_K = 3
+RERANKER_TOP_K = 2
 VECTOR_TOP_K = 100
 FTS_TOP_K = 60
 RRF_K = 60
 RERANK_POOL_SIZE = 15
 
+
 VECTOR_WEIGHT = 1.0
 FTS_WEIGHT = 1.4
+
+REFEX=False
 
 USE_RERANK = os.environ.get("USE_RERANK", "1") not in ("0", "false", "False", "")
 

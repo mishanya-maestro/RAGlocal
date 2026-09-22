@@ -1,146 +1,171 @@
-"""Проверка документа на соответствие шаблону + LLM-анализ содержания.
+"""Проверка загруженного документа на соответствие законодательству РБ.
 
-Гибридный подход:
-1. Шаблон — надёжная проверка структуры (какие разделы есть / отсутствуют).
-2. LLM — проверка содержания найденных разделов на соответствие законам и образцу.
+Pipeline:
+1. Классификация и парсинг документа (document_parser).
+2. Чек-лист compliance-проверок по типу документа (compliance_checklists).
+3. Целевой retrieval по чек-листу в релевантных кодексах.
+4. Один LLM-вызов на чанк для проверки всех пунктов чек-листа.
+5. Валидация и агрегация отчёта.
 """
 
 from __future__ import annotations
 
 import json
+import re
+import sqlite3
 import traceback
 from typing import Any
 
 import config
 import database
-from document_parser import DocumentSegment, ParsedDocument
-from document_templates import TemplateSection, analyze_structure, get_template
+from compliance_checklists import CheckItem, get_checklist
+from document_parser import DocumentSegment, ParsedDocument, chunk_segments
 from generator import _OUTPUT_RULES, _call_llm, _clean_llm_output
+from retrieval import retrieve_context
 
 
-_REQUIRED_ISSUE_FIELDS = {"quote", "issue", "norm", "suggestion", "severity", "confidence"}
+_REQUIRED_ISSUE_FIELDS = {"quote", "issue", "norm", "norm_quote", "suggestion", "severity", "confidence"}
 _SEVERITY_ORDER = {"критично": 0, "важно": 1, "рекомендация": 2}
 
 
-def _gather_law_context(queries: list[str], top_k: int = 3) -> str:
-    """Собирает контекст из законов для списка поисковых запросов."""
-    if not queries:
-        return ""
+def _resolve_filter_codes(check_items: list[CheckItem]) -> list[str] | None:
+    codes: set[str] = set()
+    for item in check_items:
+        codes.update(item.relevant_codes)
+    return sorted(codes) if codes else None
 
+
+def _gather_context_for_checklist(
+    checklist: list[CheckItem], filter_codes: list[str] | None, top_k: int = 3
+) -> tuple[list[tuple], list[dict[str, Any]]]:
+    import sqlite3
+
+    all_rows: list[tuple] = []
+    all_meta: list[dict] = []
     seen: set[tuple[str, str]] = set()
-    parts: list[str] = []
-    for query in queries[:6]:  # ограничиваем число запросов
-        try:
-            results = database.search(query, n_results=top_k)
-            docs = (results.get("documents") or [[]])[0]
-            metas = (results.get("metadatas") or [[]])[0]
-            for doc, m in zip(docs, metas):
-                key = (m.get("code", ""), m.get("number", ""))
-                if key in seen:
-                    continue
-                seen.add(key)
-                parts.append(f"### {m.get('code', '')}, ст. {m.get('number', '')}\n{doc}")
-        except Exception:
-            traceback.print_exc()
 
+    queries: list[str] = []
+    for item in checklist:
+        queries.extend(item.search_queries)
+    queries = list(dict.fromkeys(queries))[:10]  
+
+    con = sqlite3.connect(str(config.FULLTEXT_DB))
+    try:
+        for query in queries:
+            try:
+                results = database.search(query, n_results=top_k, filter_codes=filter_codes)
+                docs = (results.get("documents") or [[]])[0]
+                metas = (results.get("metadatas") or [[]])[0]
+                for doc, m in zip(docs, metas):
+                    key = (m["code"], m["number"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+
+                    row = con.execute(
+                        "SELECT text FROM fulltext WHERE code=? AND number=?",
+                        (m["code"], m["number"]),
+                    ).fetchone()
+                    if row:
+                        all_rows.append(row)
+                        all_meta.append(m)
+            except Exception:
+                traceback.print_exc()
+    finally:
+        con.close()
+
+    return all_rows, all_meta
+
+
+def _build_context(rows: list[tuple], meta: list[dict], max_chars: int = 6000) -> str:
+    parts = []
+    used = 0
+    for row, m in zip(rows, meta):
+        if not row or not row[0]:
+            continue
+        text = row[0]
+        if used + len(text) > max_chars:
+            text = text[: max_chars - used]
+        parts.append(f"### {m['code']}, ст. {m['number']}\n{text}")
+        used += len(text)
+        if used >= max_chars:
+            break
     return "\n\n".join(parts)
 
 
-def _build_content_analysis_prompt(
-    template_title: str,
-    found_sections: list[dict[str, Any]],
-    example_text: str,
-    law_context: str,
-) -> str:
-    """Строит один prompt для LLM-проверки содержания найденных разделов."""
-    sections_block = []
-    for idx, sec in enumerate(found_sections):
-        sections_block.append(
-            f"""Раздел {idx + 1}: {sec['name']}
-Описание проверки: {sec['content_prompt']}
-Текст из документа:
-{sec['section_text'][:1200]}
----"""
-        )
+def _build_checklist_prompt(checklist: list[CheckItem]) -> str:
+    lines = []
+    for item in checklist:
+        lines.append(f"- {item.id}: {item.name}. {item.description}")
+        lines.append(f"  Обязательные положения: {', '.join(item.required_clauses) or 'нет'}.")
+    return "\n".join(lines)
+
+
+def _check_chunk(
+    chunk: DocumentSegment,
+    checklist: list[CheckItem],
+    context_rows: list[tuple],
+    context_meta: list[dict],
+) -> list[dict[str, Any]]:
+    """Один LLM-вызов на чанк для проверки всех пунктов чек-листа."""
+    context = _build_context(context_rows, context_meta)
+    if not context.strip():
+        return []
 
     prompt = f"""Ты — юридический эксперт по законодательству Республики Беларусь.
 
-Проверь содержание найденных разделов документа по типу "{template_title}".
-Сверь каждый раздел с образцом и законами. Если раздел оформлен неверно или его содержание не соответствует требованиям, укажи проблему.
+Проверь фрагмент документа по следующим пунктам чек-листа. Для каждой выявленной проблемы верни объект JSON в массиве.
 
-Для каждой проблемы верни объект JSON с полями:
-- "section_id": id раздела, к которому относится проблема
-- "section_name": название раздела
-- "quote": цитата из документа, по которой выявлена проблема
-- "issue": краткое описание проблемы
-- "norm": нарушенная норма в формате "Кодекс, ст. N" (или "не указано")
-- "suggestion": конкретная формулировка, что добавить или исправить
-- "severity": "критично", "важно" или "рекомендация"
-- "confidence": число от 0.0 до 1.0
+Пункты чек-листа:
+{_build_checklist_prompt(checklist)}
 
-Если проблем нет, верни пустой массив [].
+Требования к каждому объекту:
+- "quote": цитата из фрагмента документа (точно как в тексте).
+- "issue": описание проблемы (кратко, по существу).
+- "norm": нарушенная/неучтённая статья в формате "Кодекс, ст. N".
+- "norm_quote": цитата из текста статьи, на которую ссылаешься.
+- "suggestion": конкретная формулировка правки или рекомендация.
+- "severity": одно из "критично", "важно", "рекомендация".
+- "confidence": число 0.0–1.0.
+- "check_id": id пункта чек-листа (например "c_subject").
 
-Образец документа (для сравнения):
-{example_text[:2500]}
+Если для пункта проблем нет, не включай объект. Если проблем нет вообще, верни пустой массив [].
 
-{law_context}
+Отсутствие обязательного положения в документе — это тоже проблема. Severity по умолчанию: критично для отсутствия существенных условий, важно для ответственности/формы, рекомендация для прочих.
 
-Найденные разделы из документа пользователя:
-{chr(10).join(sections_block)}
+Контекст из законодательства РБ:
+{context}
+
+Фрагмент документа (страница {chunk.page or 'неизвестна'}):
+{chunk.text}
 
 {_OUTPUT_RULES}
 
 Верни строго JSON-массив:
 [
   {{
-    "section_id": "...",
-    "section_name": "...",
     "quote": "...",
     "issue": "...",
     "norm": "...",
+    "norm_quote": "...",
     "suggestion": "...",
     "severity": "...",
-    "confidence": 0.0
+    "confidence": 0.0,
+    "check_id": "..."
   }}
 ]
 
 JSON:"""
-    return prompt
-
-
-def _analyze_content(
-    template_title: str,
-    found_sections: list[dict[str, Any]],
-    example_text: str,
-) -> list[dict[str, Any]]:
-    """LLM-проверка содержания найденных разделов."""
-    if not found_sections:
-        return []
-
-    # Собираем все поисковые запросы из разделов.
-    queries: list[str] = []
-    for sec in found_sections:
-        queries.extend(sec.get("law_queries", []))
-    queries = list(dict.fromkeys(queries))[:10]
-    law_context = _gather_law_context(queries)
-
-    prompt = _build_content_analysis_prompt(
-        template_title=template_title,
-        found_sections=found_sections,
-        example_text=example_text,
-        law_context=law_context,
-    )
-
     try:
         raw = _call_llm(
             system_prompt=(
                 "Ты юридический эксперт по законодательству РБ. "
-                "Проверяй документы строго по образцу и законам. "
-                "Ответ только JSON-массив."
+                "Анализируй документы строго по предоставленным статьям. "
+                "Ответ только в JSON-массиве без пояснений."
             ),
             user_prompt=prompt,
+            mode_override=None,
             model_override="qwen3.5:4b",
-            max_tokens=4096,
         )
         raw = _clean_llm_output(raw)
         if "```" in raw:
@@ -148,7 +173,7 @@ def _analyze_content(
         raw = raw.strip()
         if raw.startswith("json"):
             raw = raw[4:].strip()
-        items = _safe_json_loads(raw)
+        items = json.loads(raw)
         if not isinstance(items, list):
             return []
         return items
@@ -157,47 +182,68 @@ def _analyze_content(
         return []
 
 
-def _safe_json_loads(raw: str) -> Any:
-    """Пытается распарсить JSON, если нужно — дополняет обрезанный массив."""
-    candidates = [raw, raw + "]", raw + "}]", raw + '"}]', raw + '"]"}]', raw + "}"]
-    for candidate in candidates:
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-    raise json.JSONDecodeError("Unable to parse LLM JSON", raw, 0)
-
-
-def _validate_content_issue(item: dict[str, Any], found_sections: list[dict[str, Any]]) -> dict[str, Any] | None:
-    if not isinstance(item, dict):
+def _validate_issue(
+    issue: dict[str, Any],
+    chunk_text: str,
+    context_rows: list[tuple],
+    checklist: list[CheckItem],
+) -> dict[str, Any] | None:
+    if not isinstance(issue, dict):
         return None
 
     for field in _REQUIRED_ISSUE_FIELDS:
-        item.setdefault(field, "")
+        issue.setdefault(field, "")
 
-    sev = (item.get("severity") or "").lower().strip()
+    sev = (issue.get("severity") or "").lower().strip()
     if sev not in _SEVERITY_ORDER:
-        item["severity"] = "важно"
+        issue["severity"] = "важно"
     else:
-        item["severity"] = sev
+        issue["severity"] = sev
 
     try:
-        item["confidence"] = max(0.0, min(1.0, float(item.get("confidence") or 0.5)))
+        issue["confidence"] = max(0.0, min(1.0, float(issue.get("confidence") or 0.5)))
     except (ValueError, TypeError):
-        item["confidence"] = 0.5
+        issue["confidence"] = 0.5
 
-    section_id = item.get("section_id") or ""
-    section_name = item.get("section_name") or ""
-    if not section_name:
-        sec = next((s for s in found_sections if s.get("id") == section_id), None)
-        if sec:
-            item["section_name"] = sec.get("name", "")
+    quote = (issue.get("quote") or "").strip()
+    if quote and quote not in chunk_text:
+        issue["confidence"] = max(0.1, issue["confidence"] - 0.2)
+        issue["validation_note"] = "цитата не найдена дословно в фрагменте"
 
-    return item
+    norm = (issue.get("norm") or "").strip()
+    if norm:
+        match = re.search(r"([^,]+),\s*ст\.?\s*(\S+)", norm, re.IGNORECASE)
+        if match:
+            code_name = match.group(1).strip()
+            number = match.group(2).strip()
+            con = sqlite3.connect(str(config.FULLTEXT_DB))
+            try:
+                row = con.execute(
+                    "SELECT 1 FROM fulltext WHERE code=? AND number=?",
+                    (code_name, number),
+                ).fetchone()
+                if not row:
+                    issue["confidence"] = max(0.1, issue["confidence"] - 0.3)
+                    issue["validation_note"] = "норма не найдена в индексе"
+            finally:
+                con.close()
+
+    norm_quote = (issue.get("norm_quote") or "").strip()
+    if norm_quote:
+        context_text = "\n".join(r[0] for r in context_rows if r and r[0])
+        if norm_quote not in context_text:
+            issue["confidence"] = max(0.1, issue["confidence"] - 0.2)
+            issue["validation_note"] = "цитата нормы не найдена в контексте"
+
+    check_id = issue.get("check_id") or ""
+    check_name = next((c.name for c in checklist if c.id == check_id), "")
+    issue["check_name"] = check_name
+
+    return issue
 
 
 def analyze_document(parsed: ParsedDocument) -> dict[str, Any]:
-    """Главная точка входа: шаблонная структура + LLM содержание."""
+    """Главная точка входа: анализирует ParsedDocument и возвращает отчёт."""
     if not parsed or not parsed.full_text.strip():
         return {
             "chunks": 0,
@@ -206,75 +252,55 @@ def analyze_document(parsed: ParsedDocument) -> dict[str, Any]:
         }
 
     doc_type = parsed.doc_type if parsed.doc_type != "unknown" else "contract"
-    template = get_template(doc_type)
+    checklist = get_checklist(doc_type) or get_checklist("contract")
+    filter_codes = _resolve_filter_codes(checklist)
 
-    if not template:
-        return {
-            "chunks": 0,
-            "issues": [],
-            "summary": {"critical": 0, "important": 0, "recommendation": 0, "total": 0},
-            "error": f"Нет шаблона для типа документа: {doc_type}",
-        }
+    chunks = chunk_segments(parsed.segments, max_chunk_size=1500, overlap=200)
+    if not chunks:
+        chunks = [DocumentSegment(text=parsed.full_text[:5000], index=0)]
 
-    # 1. Структурный анализ.
-    structure = analyze_structure(parsed, template)
+    context_rows, context_meta = _gather_context_for_checklist(checklist, filter_codes)
 
-    # 2. Автоматические замечания по отсутствующим разделам.
-    issues: list[dict[str, Any]] = []
-    for missing in structure["missing_sections"]:
-        if not missing["required"]:
-            continue
-        issues.append(
-            {
-                "type": "missing_section",
-                "section_id": missing["id"],
-                "section_name": missing["name"],
-                "quote": "",
-                "issue": f"Отсутствует обязательный раздел: {missing['name']}. В документе не найдены ключевые слова: {', '.join(missing['keywords'][:5])}.",
-                "norm": "не указано",
-                "suggestion": f"Добавьте раздел «{missing['name']}». Пример: {missing['example_text']}",
-                "severity": missing["severity"],
-                "confidence": 0.95,
-            }
-        )
+    all_issues: list[dict[str, Any]] = []
+    errors: list[str] = []
 
-    # 3. LLM-анализ содержания найденных разделов.
-    found_sections = structure.get("found_sections", [])
-    content_issues = _analyze_content(
-        template_title=template.title,
-        found_sections=found_sections,
-        example_text=template.get_example_text(),
-    )
-    for item in content_issues:
-        validated = _validate_content_issue(item, found_sections)
-        if validated:
-            validated["type"] = "content_issue"
-            issues.append(validated)
+    for chunk in chunks:
+        try:
+            raw_issues = _check_chunk(chunk, checklist, context_rows, context_meta)
+            for issue in raw_issues:
+                validated = _validate_issue(issue, chunk.text, context_rows, checklist)
+                if validated:
+                    all_issues.append(validated)
+        except Exception as e:
+            traceback.print_exc()
+            errors.append(str(e))
 
-    # 4. Сортировка и summary.
-    issues.sort(key=lambda x: (_SEVERITY_ORDER.get(x.get("severity", ""), 3), -x.get("confidence", 0)))
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for it in all_issues:
+        key = (it.get("quote") or "") + "|" + (it.get("issue") or "") + "|" + (it.get("norm") or "")
+        if key not in seen:
+            seen.add(key)
+            unique.append(it)
+
+    unique.sort(key=lambda x: (_SEVERITY_ORDER.get(x.get("severity", ""), 3), -x.get("confidence", 0)))
 
     summary = {
-        "critical": sum(1 for i in issues if i.get("severity") == "критично"),
-        "important": sum(1 for i in issues if i.get("severity") == "важно"),
-        "recommendation": sum(1 for i in issues if i.get("severity") == "рекомендация"),
-        "total": len(issues),
+        "critical": sum(1 for i in unique if i.get("severity") == "критично"),
+        "important": sum(1 for i in unique if i.get("severity") == "важно"),
+        "recommendation": sum(1 for i in unique if i.get("severity") == "рекомендация"),
+        "total": len(unique),
     }
 
     return {
-        "chunks": 1,
+        "chunks": len(chunks),
         "doc_type": doc_type,
         "doc_type_label": _get_label(doc_type),
         "doc_type_confidence": parsed.doc_type_confidence,
         "metadata": parsed.metadata,
-        "template": {
-            "title": template.title,
-            "example_file": template.example_file,
-            "example_text": template.get_example_text(),
-        },
-        "structure": structure,
-        "issues": issues,
+        "issues": unique,
         "summary": summary,
+        "errors": errors,
     }
 
 

@@ -8,7 +8,7 @@ import requests
 import config
 import corpus_manager
 from retrieval import retrieve_context, retrieve_context_from_corpus
-
+import config
 
 # Распознаём ссылки вида «статья 9», «ст. 11_1», «статьи 12», «статьями 5 и 6».
 _REF_PATTERNS = [
@@ -26,50 +26,52 @@ _OUTPUT_RULES = (
 
 
 def _expand_references(context_rows, metadata, max_extra: int = 3):
-    """Добавить упомянутые в выбранных статьях другие статьи того же кодекса."""
-    if not metadata:
-        return context_rows, metadata
+    if config.REFEX==True:
+        """Добавить упомянутые в выбранных статьях другие статьи того же кодекса."""
+        if not metadata:
+            return context_rows, metadata
 
-    have: set[tuple[str, str]] = {(m["code"], str(m["number"])) for m in metadata}
-    extra: list[tuple[str, str]] = []
+        have: set[tuple[str, str]] = {(m["code"], str(m["number"])) for m in metadata}
+        extra: list[tuple[str, str]] = []
 
-    for row, meta in zip(context_rows, metadata):
-        if not row or not row[0]:
-            continue
-        text = row[0]
-        for pat in _REF_PATTERNS:
-            for m in pat.finditer(text):
-                num = m.group(1)
-                key = (meta["code"], num)
-                if key in have or key in [(k0, k1) for k0, k1 in extra]:
-                    continue
-                extra.append(key)
+        for row, meta in zip(context_rows, metadata):
+            if not row or not row[0]:
+                continue
+            text = row[0]
+            for pat in _REF_PATTERNS:
+                for m in pat.finditer(text):
+                    num = m.group(1)
+                    key = (meta["code"], num)
+                    if key in have or key in [(k0, k1) for k0, k1 in extra]:
+                        continue
+                    extra.append(key)
+                    if len(extra) >= max_extra:
+                        break
                 if len(extra) >= max_extra:
                     break
             if len(extra) >= max_extra:
                 break
-        if len(extra) >= max_extra:
-            break
 
-    if not extra:
+        if not extra:
+            return context_rows, metadata
+
+        con = sqlite3.connect(str(config.FULLTEXT_DB))
+        try:
+            out_rows = list(context_rows)
+            out_meta = list(metadata)
+            for code, number in extra:
+                row = con.execute(
+                    "SELECT text FROM fulltext WHERE code=? AND number=?",
+                    (code, number),
+                ).fetchone()
+                if row:
+                    out_rows.append(row)
+                    out_meta.append({"code": code, "number": number})
+            return out_rows, out_meta
+        finally:
+            con.close()
+    else:
         return context_rows, metadata
-
-    con = sqlite3.connect(str(config.FULLTEXT_DB))
-    try:
-        out_rows = list(context_rows)
-        out_meta = list(metadata)
-        for code, number in extra:
-            row = con.execute(
-                "SELECT text FROM fulltext WHERE code=? AND number=?",
-                (code, number),
-            ).fetchone()
-            if row:
-                out_rows.append(row)
-                out_meta.append({"code": code, "number": number})
-        return out_rows, out_meta
-    finally:
-        con.close()
-
 
 def _build_context(rows, metadata) -> str:
     parts: list[str] = []
@@ -313,8 +315,8 @@ def generate_answer(
 
     user_prompt = f"""Ты — юридический консультант по законодательству Республики Беларусь.
 Используй ТОЛЬКО приведённые ниже источники. Каждый важный тезис подкрепляй короткой цитатой в кавычках и ссылкой на источник (документ или статью).
-Если ответа в приложенных источниках нет, честно напиши, что в предоставленных документах нет информации по этому вопросу. Не выдумывай нормы и факты.
-Пиши на русском языке. Не раскрывай внутренние рассуждения и не повторяй инструкции.
+Если прямого ответа в источниках нет, ответь на основе тех документов, что у тебя есть. Не выдумывай нормы и факты.
+Пиши на русском языке. Не раскрывай внутренние рассуждения и не повторяй инструкции, не говори фразы по типу 'в приведенных статьях сказано', говори от первого лица.Не ссылайся на статьи, которые тебе не предоставлены.
 
 Контекст:
 {context}
@@ -322,7 +324,7 @@ def generate_answer(
 Вопрос гражданина: {query}
 
 Ответ (со ссылками на источники):"""
-
+    print(context)
     answer = _call_llm(
         system_prompt=(
             "Ты юридический консультант по законодательству РБ. "
