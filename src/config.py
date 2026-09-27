@@ -59,7 +59,7 @@ OPENROUTER_LLM_MODEL = os.environ.get("OPENROUTER_LLM_MODEL", "openai/gpt-oss-12
 
 # --- Retrieval (фиксированы: одна векторная БД / один корпус) ---
 RETRIEVER_TOP_K = 7
-RERANKER_TOP_K = 2
+RERANKER_TOP_K = 3
 VECTOR_TOP_K = 100
 FTS_TOP_K = 60
 RRF_K = 60
